@@ -14,12 +14,9 @@ const DOMAIN_SITE_MAP: Record<string, { slug: string; locale: string }> = {
   'baam-mt.com': { slug: 'mt-en', locale: 'en' },
   'www.baam-mt.com': { slug: 'mt-en', locale: 'en' },
   'middletown.baam.com': { slug: 'mt-en', locale: 'en' },
+  'baam-us-local.vercel.app': { slug: 'mt-en', locale: 'en' },
   // Development
   'localhost': { slug: 'mt-en', locale: 'en' },
-  // Future sites — uncomment when ready
-  // 'middletown-local.com': { slug: 'oc-en', locale: 'en' },
-  // 'www.middletown-local.com': { slug: 'oc-en', locale: 'en' },
-  // 'oc.baam.us': { slug: 'oc-en', locale: 'en' },
 };
 
 function normalizeHost(host: string): string {
@@ -27,9 +24,9 @@ function normalizeHost(host: string): string {
 }
 
 function resolveSite(host: string | null): { slug: string; locale: string } {
-  if (!host) return { slug: 'ny-zh', locale: 'zh' };
+  if (!host) return { slug: 'mt-en', locale: 'en' };
   const hostname = normalizeHost(host);
-  return DOMAIN_SITE_MAP[hostname] || { slug: 'ny-zh', locale: 'zh' };
+  return DOMAIN_SITE_MAP[hostname] || { slug: 'mt-en', locale: 'en' };
 }
 
 export default async function middleware(request: NextRequest) {
