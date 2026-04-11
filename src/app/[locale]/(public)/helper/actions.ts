@@ -1,7 +1,7 @@
 'use server';
 
-import { createHelper, createBaamEnglishFetcher, type HelperMessage, type HelperResult } from '@baam/helper-core';
-import { createEnglishLocaleKit } from '@baam/helper-en';
+import { createHelper, createBaamEnglishFetcher, type HelperMessage, type HelperResult } from '@/lib/helper-core';
+import { createEnglishLocaleKit } from '@/lib/helper-en';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getCurrentSite } from '@/lib/sites';
 import { allocateAnswerType } from '@/lib/helper/allocator';

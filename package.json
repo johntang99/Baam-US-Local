@@ -10,9 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@baam/helper-core": "file:../../packages/helper-core",
-    "@baam/helper-en": "file:../../packages/helper-en",
-    "@supabase/ssr": "^0.6.0",
+"@supabase/ssr": "^0.6.0",
     "@supabase/supabase-js": "^2.49.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
