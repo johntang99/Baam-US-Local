@@ -54,11 +54,10 @@ export default function BaamMap({ businesses, selectedId, onSelectBusiness, user
       // Add zoom control to top-right
       L.control.zoom({ position: 'topright' }).addTo(map);
 
-      // Tile layer — clean CartoDB Positron style
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 19,
+      // Tile layer — Stadia OSM Bright (high detail, Google Maps-like)
+      L.tileLayer('https://tiles.stadiamaps.com/tiles/osm_bright/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        maxZoom: 20,
       }).addTo(map);
 
       mapInstanceRef.current = map;
@@ -77,23 +76,24 @@ export default function BaamMap({ businesses, selectedId, onSelectBusiness, user
   // Create custom pin icon
   const createPinIcon = useCallback(async (rank: number, isTop: boolean, isActive: boolean) => {
     const L = (await import('leaflet')).default;
-    const size = isActive ? 40 : 34;
+    const size = isActive ? 30 : 24;
+    const fontSize = isActive ? 12 : 10;
     const bg = isTop ? '#DC2626' : '#F97316';
-    const border = isActive ? '3px solid #F97316' : '2.5px solid white';
-    const shadow = isActive ? '0 3px 12px rgba(249,115,22,0.4)' : '0 2px 8px rgba(0,0,0,0.2)';
+    const border = isActive ? '2.5px solid #F97316' : '2px solid white';
+    const shadow = isActive ? '0 2px 8px rgba(249,115,22,0.4)' : '0 1px 4px rgba(0,0,0,0.2)';
 
     return L.divIcon({
       className: 'baam-pin',
       html: `<div style="
         width: ${size}px; height: ${size}px;
         background: ${bg}; border: ${border};
-        border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+        border-radius: 50%;
         display: flex; align-items: center; justify-content: center;
         box-shadow: ${shadow}; cursor: pointer;
-      "><span style="transform: rotate(45deg); color: white; font-size: ${isActive ? 15 : 13}px; font-weight: 800;">${rank}</span></div>`,
-      iconSize: [size, size + 8],
-      iconAnchor: [size / 2, size + 8],
-      popupAnchor: [0, -(size + 4)],
+      "><span style="color: white; font-size: ${fontSize}px; font-weight: 800;">${rank}</span></div>`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      popupAnchor: [0, -(size / 2 + 4)],
     });
   }, []);
 

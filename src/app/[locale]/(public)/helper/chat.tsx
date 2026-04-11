@@ -206,12 +206,30 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
   const [feedbackSent, setFeedbackSent] = useState<Record<string, 1 | -1>>({}); // messageId → rating
   const [mapView, setMapView] = useState<Record<string, boolean>>({}); // messageId → show map
   const [mapSelectedId, setMapSelectedId] = useState<string | null>(null);
-  const endRef = useRef<HTMLDivElement>(null);
+  const [mapExpandedId, setMapExpandedId] = useState<string | null>(null); // which message's map is expanded
+  const [mapListMode, setMapListMode] = useState<Record<string, boolean>>({}); // messageId → show list below map
+
+  // Browser back closes expanded map
+  useEffect(() => {
+    if (!mapExpandedId) return;
+    window.history.pushState({ mapExpanded: true }, '');
+    const onPopState = () => setMapExpandedId(null);
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [mapExpandedId]);
+  const lastMsgRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const prevMsgCount = useRef(0);
   const handleVoiceResult = useCallback((text: string) => { setInput(text); inputRef.current?.focus(); }, []);
   const voice = useVoiceInput(handleVoiceResult);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
+  // Auto-scroll only when a NEW message is added (not during progressive render)
+  useEffect(() => {
+    if (messages.length > prevMsgCount.current) {
+      lastMsgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    prevMsgCount.current = messages.length;
+  }, [messages.length, loading]);
 
   useEffect(() => {
     if (!loading && !renderingAnswer) { setLoadingStep(0); return; }
@@ -220,7 +238,14 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
   }, [loading, renderingAnswer]);
 
   useEffect(() => {
-    if (initialQuery && !autoAsked) { setAutoAsked(true); void handleAsk(initialQuery); }
+    if (initialQuery && !autoAsked) {
+      setAutoAsked(true);
+      void handleAsk(initialQuery);
+      // Clear ?q= from URL so browser back doesn't re-trigger the query
+      const url = new URL(window.location.href);
+      url.searchParams.delete('q');
+      window.history.replaceState({}, '', url.toString());
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQuery, autoAsked]);
 
@@ -299,8 +324,8 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
           </div>
         )}
 
-        {messages.map((message) => (
-          <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+        {messages.map((message, msgIdx) => (
+          <div key={message.id} ref={msgIdx === messages.length - 1 ? lastMsgRef : undefined} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[90%] ${message.role === 'user' ? 'bg-primary text-white rounded-2xl rounded-br-md px-4 py-3' : 'bg-bg-card border border-border rounded-2xl rounded-bl-md px-5 py-4'}`}>
               {message.role === 'assistant' && (
                 <div className="flex items-center gap-2 mb-2">
@@ -327,18 +352,84 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
 
               {/* Map view (when toggled) */}
               {mapView[message.id] && message.mapBusinesses && !message.fullContent && (
-                <div className="mb-4">
-                  <div className="rounded-xl overflow-hidden border border-border">
-                    <BaamMap businesses={message.mapBusinesses} selectedId={mapSelectedId} onSelectBusiness={(biz) => setMapSelectedId(biz?.id || null)} height="280px" />
+                <>
+                  {/* Google Maps-style expanded overlay: sidebar + map */}
+                  {mapExpandedId === message.id && (
+                    <div className="fixed inset-0 z-[9999] bg-white flex flex-col">
+                      {/* Top bar */}
+                      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border flex-shrink-0">
+                        <span className="text-sm font-semibold">{message.mapBusinesses.length} results</span>
+                        <button type="button" onClick={() => { setMapExpandedId(null); window.history.back(); }}
+                          className="flex items-center gap-1.5 text-sm font-semibold text-text-secondary hover:text-primary transition-colors">
+                          ← Back to Helper
+                        </button>
+                      </div>
+                      {/* Sidebar + Map */}
+                      <div className="flex flex-1 overflow-hidden">
+                        {/* Left sidebar — business list */}
+                        <div className="w-[360px] border-r border-border flex-shrink-0 overflow-y-auto hidden md:block">
+                          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                          {message.mapBusinesses.map((biz: any, i: number) => (
+                            <div key={biz.id}>
+                              <BusinessCard business={biz} rank={i + 1} isActive={biz.id === mapSelectedId} onClick={() => setMapSelectedId(biz.id)} />
+                            </div>
+                          ))}
+                        </div>
+                        {/* Right map */}
+                        <div className="flex-1">
+                          <BaamMap businesses={message.mapBusinesses} selectedId={mapSelectedId} onSelectBusiness={(biz) => setMapSelectedId(biz?.id || null)} height="100%" className="rounded-none" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {/* Inline map */}
+                  <div className="mb-4">
+                    <div className="relative rounded-xl overflow-hidden border border-border">
+                      <BaamMap businesses={message.mapBusinesses} selectedId={mapSelectedId} onSelectBusiness={(biz) => setMapSelectedId(biz?.id || null)} height="400px" />
+                      <button type="button" onClick={() => setMapExpandedId(message.id)}
+                        className="absolute top-3 left-3 z-[500] bg-white border border-border rounded-lg px-2.5 py-1.5 text-xs font-semibold text-text-secondary hover:text-primary hover:border-primary shadow-sm transition-colors"
+                        title="Expand map">
+                        ⛶ Expand
+                      </button>
+                    </div>
+
+                    {/* Toggle: horizontal scroll vs vertical list */}
+                    <div className="flex items-center justify-between mt-3 mb-2">
+                      <span className="text-xs text-text-muted">{message.mapBusinesses.length} businesses</span>
+                      <div className="flex border border-border rounded-md overflow-hidden">
+                        <button type="button" onClick={() => setMapListMode(prev => ({ ...prev, [message.id]: false }))}
+                          className={`px-2 py-1 text-[11px] font-semibold transition-colors ${!mapListMode[message.id] ? 'bg-primary/10 text-primary' : 'text-text-muted hover:text-text-secondary'}`}>
+                          Cards
+                        </button>
+                        <button type="button" onClick={() => setMapListMode(prev => ({ ...prev, [message.id]: true }))}
+                          className={`px-2 py-1 text-[11px] font-semibold transition-colors border-l border-border ${mapListMode[message.id] ? 'bg-primary/10 text-primary' : 'text-text-muted hover:text-text-secondary'}`}>
+                          List
+                        </button>
+                      </div>
+                    </div>
+
+                    {mapListMode[message.id] ? (
+                      /* Vertical list view */
+                      <div className="space-y-2">
+                        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                        {message.mapBusinesses.map((biz: any, i: number) => (
+                          <BusinessCard key={biz.id} business={biz} rank={i + 1} isActive={biz.id === mapSelectedId} onClick={() => setMapSelectedId(biz.id)} />
+                        ))}
+                      </div>
+                    ) : (
+                      /* Horizontal scroll cards */
+                      <>
+                        <div className="flex gap-2.5 overflow-x-auto py-1 no-scrollbar">
+                          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                          {message.mapBusinesses.slice(0, 10).map((biz: any, i: number) => (
+                            <BusinessCard key={biz.id} business={biz} rank={i + 1} isActive={biz.id === mapSelectedId} onClick={() => setMapSelectedId(biz.id)} compact />
+                          ))}
+                        </div>
+                        <p className="text-[11px] text-text-muted text-center mt-1">← Scroll for more results →</p>
+                      </>
+                    )}
                   </div>
-                  <div className="flex gap-2.5 overflow-x-auto py-3 no-scrollbar">
-                    {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                    {message.mapBusinesses.slice(0, 10).map((biz: any, i: number) => (
-                      <BusinessCard key={biz.id} business={biz} rank={i + 1} isActive={biz.id === mapSelectedId} onClick={() => setMapSelectedId(biz.id)} compact />
-                    ))}
-                  </div>
-                  <p className="text-[11px] text-text-muted text-center">← Scroll for more results →</p>
-                </div>
+                </>
               )}
 
               {/* Content (list view or when no map data) */}
@@ -444,7 +535,7 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
           </div>
         )}
 
-        <div ref={endRef} />
+        <div />
       </div>
 
       <form onSubmit={(e) => { e.preventDefault(); void handleAsk(input); }} className="sticky bottom-4">
