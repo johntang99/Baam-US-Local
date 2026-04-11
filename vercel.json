@@ -1,3 +1,3 @@
 {
-  "installCommand": "npm cache clean --force && cd ../.. && npm install"
+  "installCommand": "rm -rf /vercel/.npm && cd ../.. && npm install"
 }
