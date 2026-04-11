@@ -1,0 +1,479 @@
+'use client';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
+import ReactMarkdown from 'react-markdown';
+import type { Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { askHelper, submitHelperFeedback } from './actions';
+import BusinessCard from '@/components/map/BusinessCard';
+
+const BaamMap = dynamic(() => import('@/components/map/BaamMap'), { ssr: false });
+
+interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  fullContent?: string;
+  sources?: {
+    type: string;
+    title: string;
+    url: string;
+    snippet?: string;
+    isExternal?: boolean;
+  }[];
+  usedWebFallback?: boolean;
+  quickReplies?: string[];
+  query?: string; // the user query that triggered this answer
+  answerType?: string;
+  provider?: string;
+  keywords?: string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mapBusinesses?: any[];
+}
+
+const sourceTypeMeta: Record<string, { icon: string; badgeClass: string }> = {
+  'Business': { icon: '🏪', badgeClass: 'bg-blue-50 text-blue-700 border-blue-200' },
+  'Guide': { icon: '📘', badgeClass: 'bg-green-50 text-green-700 border-green-200' },
+  'Forum': { icon: '💬', badgeClass: 'bg-purple-50 text-purple-700 border-purple-200' },
+  'Discover': { icon: '📝', badgeClass: 'bg-rose-50 text-rose-700 border-rose-200' },
+  'News': { icon: '📰', badgeClass: 'bg-red-50 text-red-700 border-red-200' },
+  'Event': { icon: '🎪', badgeClass: 'bg-orange-50 text-orange-700 border-orange-200' },
+  // Chinese labels (from Baam fetcher — will show if fetcher uses Chinese labels)
+  '商家': { icon: '🏪', badgeClass: 'bg-blue-50 text-blue-700 border-blue-200' },
+  '指南': { icon: '📘', badgeClass: 'bg-green-50 text-green-700 border-green-200' },
+  '论坛': { icon: '💬', badgeClass: 'bg-purple-50 text-purple-700 border-purple-200' },
+  '新闻': { icon: '📰', badgeClass: 'bg-red-50 text-red-700 border-red-200' },
+  '活动': { icon: '🎪', badgeClass: 'bg-orange-50 text-orange-700 border-orange-200' },
+  '网页': { icon: '🌐', badgeClass: 'bg-slate-50 text-slate-700 border-slate-200' },
+};
+
+const SUGGESTED_QUESTIONS = [
+  'Best pizza places in Middletown?',
+  'How do I register my car in New York?',
+  'Any family-friendly events this weekend?',
+  'Recommend a good dentist near Goshen',
+  'What do I need to know about property taxes?',
+];
+
+const LOADING_MESSAGES = [
+  'Looking up the best results...',
+  'Checking businesses, guides, and forum...',
+  'Verifying ratings and sources...',
+  'Almost done — putting together your answer.',
+];
+
+function normalizePhone(raw: string): string | null {
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return null;
+}
+
+function extractPhone(text: string): string | null {
+  const phoneMatch = text.match(/\(?\d{3}\)?[\s\-.]?\d{3}[\s\-.]?\d{4}/);
+  return phoneMatch ? phoneMatch[0] : null;
+}
+
+function nodeToText(node: unknown): string {
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map((item) => nodeToText(item)).join('');
+  if (node && typeof node === 'object' && 'props' in node) {
+    const maybeProps = (node as { props?: { children?: unknown } }).props;
+    return nodeToText(maybeProps?.children ?? '');
+  }
+  return '';
+}
+
+function nodeContainsAnchor(node: unknown): boolean {
+  if (!node) return false;
+  if (Array.isArray(node)) return node.some((item) => nodeContainsAnchor(item));
+  if (typeof node === 'object') {
+    const maybeNode = node as { type?: unknown; props?: { children?: unknown } };
+    if (maybeNode.type === 'a') return true;
+    return nodeContainsAnchor(maybeNode.props?.children);
+  }
+  return false;
+}
+
+function looksLikeAddress(text: string): boolean {
+  const cleaned = text.trim();
+  if (cleaned.length < 10) return false;
+  return /\d/.test(cleaned) && /(st|ave|blvd|rd|dr|lane|ln|way|court|ct|place|pl|street|avenue|broadway|ny)/i.test(cleaned);
+}
+
+// ─── Voice input hook ────────────────────────────────────────
+function useVoiceInput(onResult: (text: string) => void) {
+  const [isListening, setIsListening] = useState(false);
+  const [isSupported, setIsSupported] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  useEffect(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) {
+      setIsSupported(true);
+      const recognition = new SR();
+      recognition.lang = 'en-US';
+      recognition.interimResults = false;
+      recognition.continuous = false;
+      recognition.maxAlternatives = 1;
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
+        const transcript = event.results[0]?.[0]?.transcript || '';
+        if (transcript) onResult(transcript);
+      };
+      recognition.onend = () => setIsListening(false);
+      recognition.onerror = () => setIsListening(false);
+      recognitionRef.current = recognition;
+    }
+  }, [onResult]);
+
+  const toggle = useCallback(() => {
+    const recognition = recognitionRef.current;
+    if (!recognition) return;
+    if (isListening) recognition.stop();
+    else { recognition.start(); setIsListening(true); }
+  }, [isListening]);
+
+  return { isListening, isSupported, toggle };
+}
+
+const markdownComponents: Components = {
+  table: ({ children }) => (
+    <div className="my-6 rounded-lg border border-border bg-white/60 overflow-hidden">
+      {/* Desktop: normal table */}
+      <div className="hidden md:block overflow-x-auto">
+        <table className="w-full border-collapse text-sm leading-6 [&_th]:whitespace-nowrap [&_th]:bg-bg-page [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-left [&_th]:text-xs [&_th]:font-semibold [&_th]:border [&_th]:border-border [&_td]:px-2.5 [&_td]:py-2.5 [&_td]:text-sm [&_td]:align-top [&_td]:border [&_td]:border-border [&_td_p]:my-0">
+          {children}
+        </table>
+      </div>
+      {/* Mobile: card layout — CSS transforms table rows into stacked cards */}
+      <div className="md:hidden [&_thead]:hidden [&_table]:block [&_tbody]:block [&_tr]:block [&_tr]:border-b [&_tr]:border-border [&_tr]:py-3 [&_tr]:px-4 [&_tr:last-child]:border-b-0 [&_td]:block [&_td]:border-0 [&_td]:px-0 [&_td]:py-0.5 [&_td]:text-sm [&_td:first-child]:font-bold [&_td:first-child]:text-primary [&_td:first-child]:text-xs [&_td:first-child]:mb-0.5 [&_td:nth-child(2)]:font-semibold [&_td:nth-child(2)]:text-base [&_td_p]:my-0">
+        <table>
+          {children}
+        </table>
+      </div>
+    </div>
+  ),
+  hr: () => <hr className="mt-6 mb-8 border-border" />,
+  a: ({ href, children, ...props }) => {
+    if (!href) return <span>{children}</span>;
+    if (href.startsWith('tel:')) {
+      return <a href={href} {...props} className="underline underline-offset-2 whitespace-nowrap">{children}</a>;
+    }
+    // Internal links — no target="_blank", no wrapper nesting
+    if (href.startsWith('/en/')) {
+      return <a href={href} {...props} className="text-text-primary font-semibold hover:text-primary transition-colors">{children}</a>;
+    }
+    return <a href={href} target="_blank" rel="noopener noreferrer" {...props} className="underline underline-offset-2">{children}</a>;
+  },
+  td: ({ children, ...props }) => {
+    if (nodeContainsAnchor(children)) return <td {...props}>{children}</td>;
+    const text = nodeToText(children).replace(/\s+/g, ' ').trim();
+    const phone = extractPhone(text);
+    if (phone) {
+      const normalized = normalizePhone(phone);
+      if (normalized) {
+        return (
+          <td {...props}>
+            <a href={`tel:${normalized}`} className="underline underline-offset-2 whitespace-nowrap" title={`Call ${phone}`}>{children}</a>
+          </td>
+        );
+      }
+    }
+    if (looksLikeAddress(text)) {
+      return (
+        <td {...props}>
+          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(text)}`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2" title="Open in Google Maps">{children}</a>
+        </td>
+      );
+    }
+    return <td {...props}>{children}</td>;
+  },
+};
+
+interface HelperChatProps {
+  initialQuery?: string;
+}
+
+export function HelperChat({ initialQuery }: HelperChatProps) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState(initialQuery || '');
+  const [loading, setLoading] = useState(false);
+  const [renderingAnswer, setRenderingAnswer] = useState(false);
+  const [loadingStep, setLoadingStep] = useState(0);
+  const [autoAsked, setAutoAsked] = useState(false);
+  const [feedbackSent, setFeedbackSent] = useState<Record<string, 1 | -1>>({}); // messageId → rating
+  const [mapView, setMapView] = useState<Record<string, boolean>>({}); // messageId → show map
+  const [mapSelectedId, setMapSelectedId] = useState<string | null>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const handleVoiceResult = useCallback((text: string) => { setInput(text); inputRef.current?.focus(); }, []);
+  const voice = useVoiceInput(handleVoiceResult);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
+
+  useEffect(() => {
+    if (!loading && !renderingAnswer) { setLoadingStep(0); return; }
+    const timer = setInterval(() => setLoadingStep((p) => (p + 1) % LOADING_MESSAGES.length), 1700);
+    return () => clearInterval(timer);
+  }, [loading, renderingAnswer]);
+
+  useEffect(() => {
+    if (initialQuery && !autoAsked) { setAutoAsked(true); void handleAsk(initialQuery); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuery, autoAsked]);
+
+  const progressivelyRenderAnswer = useCallback(
+    async (messageId: string, fullContent: string, meta: Pick<Message, 'sources' | 'usedWebFallback' | 'quickReplies' | 'query' | 'answerType' | 'provider' | 'keywords' | 'mapBusinesses'>) => {
+      setRenderingAnswer(true);
+      const total = fullContent.length;
+      const targetMs = Math.min(10000, Math.max(3000, total * 10));
+      const tickMs = 24;
+      const step = Math.max(2, Math.ceil(total / Math.max(1, Math.floor(targetMs / tickMs))));
+      let index = 0;
+      while (index < total) {
+        const c = fullContent[index] || '';
+        const pause = /[.!?\n]/.test(c) ? 20 : 0;
+        await new Promise((r) => setTimeout(r, tickMs + pause));
+        index = Math.min(index + step, total);
+        setMessages((prev) => prev.map((m) => m.id === messageId ? { ...m, content: fullContent.slice(0, index) } : m));
+      }
+      setMessages((prev) => prev.map((m) => m.id === messageId ? { ...m, content: fullContent, fullContent: undefined, ...meta } : m));
+      setRenderingAnswer(false);
+      inputRef.current?.focus();
+    },
+    [],
+  );
+
+  async function handleAsk(rawQuery: string) {
+    const query = rawQuery.trim();
+    if (!query || loading) return;
+    const nextHistory = messages.map((m) => ({ role: m.role, content: m.fullContent ?? m.content })) as { role: 'user' | 'assistant'; content: string }[];
+    setInput('');
+    setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: 'user', content: query }]);
+    setLoading(true);
+
+    // Update URL for shareability (first query only)
+    if (messages.length === 0) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('q', query);
+      window.history.replaceState({}, '', url.toString());
+    }
+
+    const result = await askHelper(query, nextHistory);
+    if (result.error || !result.data) {
+      setMessages((prev) => [...prev, { id: `a-err-${Date.now()}`, role: 'assistant', content: result.error || 'Helper is temporarily unavailable.' }]);
+      setLoading(false);
+      inputRef.current?.focus();
+      return;
+    }
+
+    const data = result.data;
+    const assistantId = `a-${Date.now()}`;
+    setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', content: '', fullContent: data.answer }]);
+    setLoading(false);
+    await progressivelyRenderAnswer(assistantId, data.answer, {
+      sources: data.sources, usedWebFallback: data.usedWebFallback, quickReplies: data.quickReplies,
+      query, answerType: data.intent, provider: data.provider, keywords: data.keywords,
+      mapBusinesses: data.mapBusinesses,
+    });
+  }
+
+  return (
+    <div>
+      <div className="space-y-4 pb-20 min-h-[220px]">
+        {messages.length === 0 && !loading && !renderingAnswer && (
+          <div className="text-center py-8">
+            <p className="text-text-muted text-sm mb-6">
+              Ask me anything about the local community — businesses, events, guides, and more.
+            </p>
+            <div className="flex flex-wrap justify-center gap-2">
+              {SUGGESTED_QUESTIONS.map((q) => (
+                <button key={q} type="button" onClick={() => void handleAsk(q)} disabled={loading}
+                  className="text-xs bg-border-light text-text-secondary px-3 py-1.5 rounded-full hover:bg-primary/10 hover:text-primary transition disabled:opacity-50">
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {messages.map((message) => (
+          <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[90%] ${message.role === 'user' ? 'bg-primary text-white rounded-2xl rounded-br-md px-4 py-3' : 'bg-bg-card border border-border rounded-2xl rounded-bl-md px-5 py-4'}`}>
+              {message.role === 'assistant' && (
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-sm">🤖</span>
+                  <span className="text-xs font-medium text-primary">Helper</span>
+                  {message.usedWebFallback && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">+ web</span>
+                  )}
+                </div>
+              )}
+              {/* Map/List toggle for business recommendations (only after fully rendered) */}
+              {message.mapBusinesses && message.mapBusinesses.length > 0 && !message.fullContent && (
+                <div className="flex border border-border rounded-lg overflow-hidden mb-4">
+                  <button type="button" onClick={() => setMapView(prev => ({ ...prev, [message.id]: false }))}
+                    className={`flex-1 py-2 text-xs font-semibold transition-colors ${!mapView[message.id] ? 'bg-bg-card text-text-primary' : 'bg-bg-page text-text-muted'}`}>
+                    📋 List View
+                  </button>
+                  <button type="button" onClick={() => setMapView(prev => ({ ...prev, [message.id]: true }))}
+                    className={`flex-1 py-2 text-xs font-semibold transition-colors ${mapView[message.id] ? 'bg-primary/10 text-primary border-b-2 border-primary' : 'bg-bg-page text-text-muted'}`}>
+                    📍 Map View
+                  </button>
+                </div>
+              )}
+
+              {/* Map view (when toggled) */}
+              {mapView[message.id] && message.mapBusinesses && !message.fullContent && (
+                <div className="mb-4">
+                  <div className="rounded-xl overflow-hidden border border-border">
+                    <BaamMap businesses={message.mapBusinesses} selectedId={mapSelectedId} onSelectBusiness={(biz) => setMapSelectedId(biz?.id || null)} height="280px" />
+                  </div>
+                  <div className="flex gap-2.5 overflow-x-auto py-3 no-scrollbar">
+                    {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                    {message.mapBusinesses.slice(0, 10).map((biz: any, i: number) => (
+                      <BusinessCard key={biz.id} business={biz} rank={i + 1} isActive={biz.id === mapSelectedId} onClick={() => setMapSelectedId(biz.id)} compact />
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-text-muted text-center">← Scroll for more results →</p>
+                </div>
+              )}
+
+              {/* Content (list view or when no map data) */}
+              {(!mapView[message.id] || !message.mapBusinesses || message.fullContent) && (
+                <div className="text-[15px] leading-7 prose prose-sm max-w-none prose-p:my-3 prose-li:my-1 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-[15px] [&_h3]:font-bold [&_h3]:mt-10 [&_h3]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_hr]:my-10">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {message.content}
+                  </ReactMarkdown>
+                </div>
+              )}
+
+              {message.sources && message.sources.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-border">
+                  <p className="text-xs text-text-muted mb-2">Sources</p>
+                  <div className="space-y-2">
+                    {message.sources.slice(0, 8).map((source, i) => {
+                      const href = source.isExternal ? source.url : `/en${source.url}`;
+                      const meta = sourceTypeMeta[source.type] || { icon: '📎', badgeClass: 'bg-border-light text-text-secondary border-border' };
+                      return (
+                        <a key={`${source.title}-${i}`} href={href} target="_blank" rel="noopener noreferrer"
+                          className="block rounded-xl border border-border px-3.5 py-3 hover:bg-bg-page transition">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full border ${meta.badgeClass}`}>
+                              <span>{meta.icon}</span>
+                              <span>{source.type}</span>
+                            </span>
+                            <span className="text-sm font-semibold text-text-primary line-clamp-1">{source.title}</span>
+                          </div>
+                          {source.snippet && <p className="text-xs leading-5 text-text-secondary line-clamp-2">{source.snippet}</p>}
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {message.quickReplies && message.quickReplies.length > 0 && (
+                <div className="mt-4 pt-3 border-t border-border">
+                  <div className="flex flex-wrap gap-2">
+                    {message.quickReplies.map((chip) => (
+                      <button key={chip} type="button" onClick={() => void handleAsk(chip)} disabled={loading || renderingAnswer}
+                        className="text-xs bg-primary/5 text-primary border border-primary/20 px-3 py-1.5 rounded-full hover:bg-primary/15 transition disabled:opacity-50">
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Feedback thumbs */}
+              {message.role === 'assistant' && message.query && !message.fullContent && (
+                <div className="mt-3 pt-3 border-t border-border flex items-center gap-3">
+                  <span className="text-xs text-text-muted">Was this helpful?</span>
+                  {feedbackSent[message.id] ? (
+                    <span className="text-xs text-text-muted">
+                      {feedbackSent[message.id] === 1 ? '👍 Thanks!' : '👎 Thanks for the feedback'}
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFeedbackSent(prev => ({ ...prev, [message.id]: 1 }));
+                          void submitHelperFeedback(message.query!, 1, {
+                            answerType: message.answerType, keywords: message.keywords, provider: message.provider,
+                          });
+                        }}
+                        className="text-lg hover:scale-125 transition-transform"
+                        title="Helpful"
+                      >👍</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFeedbackSent(prev => ({ ...prev, [message.id]: -1 }));
+                          void submitHelperFeedback(message.query!, -1, {
+                            answerType: message.answerType, keywords: message.keywords, provider: message.provider,
+                          });
+                        }}
+                        className="text-lg hover:scale-125 transition-transform"
+                        title="Not helpful"
+                      >👎</button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+
+        {(loading || renderingAnswer) && (
+          <div className="flex justify-start">
+            <div className="bg-bg-card border border-border rounded-2xl rounded-bl-md px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm">🤖</span>
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 bg-primary/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <div className="w-2 h-2 bg-primary/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <div className="w-2 h-2 bg-primary/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+                <span className="text-xs text-text-muted">{loading ? LOADING_MESSAGES[loadingStep] : 'Rendering answer...'}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={endRef} />
+      </div>
+
+      <form onSubmit={(e) => { e.preventDefault(); void handleAsk(input); }} className="sticky bottom-4">
+        <div className="flex gap-2 bg-bg-card border border-border rounded-xl p-2 shadow-lg">
+          <input
+            ref={inputRef} type="text" value={input}
+            onChange={(e) => setInput(e.target.value)}
+            disabled={loading || renderingAnswer}
+            placeholder={voice.isListening ? 'Listening...' : 'Ask Helper anything about the local community...'}
+            className="flex-1 h-10 px-3 text-sm outline-none bg-transparent"
+          />
+          {voice.isSupported && (
+            <button type="button" onClick={voice.toggle} disabled={loading || renderingAnswer}
+              className={`h-10 w-10 flex items-center justify-center rounded-lg transition-colors flex-shrink-0 ${voice.isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-bg-page text-text-secondary hover:bg-primary/10 hover:text-primary'} disabled:opacity-50`}
+              title={voice.isListening ? 'Stop' : 'Voice input'}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                {voice.isListening
+                  ? <path d="M6 6h12v12H6z" />
+                  : <path d="M12 14a3 3 0 003-3V5a3 3 0 10-6 0v6a3 3 0 003 3zm5-3a5 5 0 01-10 0H5a7 7 0 0014 0h-2zm-4 7.93A7.001 7.001 0 0112 19a7.001 7.001 0 01-1 0V22h2v-3.07z" />
+                }
+              </svg>
+            </button>
+          )}
+          <button type="submit" disabled={loading || renderingAnswer || !input.trim()}
+            className="h-10 px-5 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary-dark disabled:opacity-50 transition-colors flex-shrink-0">
+            Send
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}

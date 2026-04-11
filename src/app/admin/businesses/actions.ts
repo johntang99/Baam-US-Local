@@ -41,6 +41,7 @@ function extractBusinessFields(formData: FormData) {
     verification_status: (formData.get('verification_status') as string) || 'unverified',
     current_plan: (formData.get('current_plan') as string) || 'free',
     is_featured: formData.get('is_featured') === 'true',
+    p_score: parseFloat(formData.get('p_score') as string) || 0,
   };
 }
 

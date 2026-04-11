@@ -111,11 +111,19 @@ export default function BusinessForm({
   // Media
   const [videoUrl, setVideoUrl] = useState(business?.video_url || '');
 
+  // Scores
+  const [pScore, setPScore] = useState<number>(business?.p_score ? Number(business.p_score) : 0);
+
   // Right column
   const [status, setStatus] = useState(business?.status || 'active');
   const [verificationStatus, setVerificationStatus] = useState(business?.verification_status || 'unverified');
   const [currentPlan, setCurrentPlan] = useState(business?.current_plan || 'free');
   const [isFeatured, setIsFeatured] = useState(business?.is_featured || false);
+
+  // Compute total_score preview (same formula as DB: 6×Rating + 3×[log(Reviews+2)×2] + 1×P_score)
+  const avgRating = business?.avg_rating ? Number(business.avg_rating) : 0;
+  const reviewCount = business?.review_count ? Number(business.review_count) : 0;
+  const computedTotalScore = 6 * avgRating + 3 * (Math.log10(Math.max(reviewCount + 1, 1) + 1) * 2) + 1 * pScore;
 
   // Categories — sequential dropdowns
   const initCat = initCategorySelection(categoryTree, initialSelectedCategoryIds);
@@ -153,6 +161,7 @@ export default function BusinessForm({
     fd.set('verification_status', verificationStatus);
     fd.set('current_plan', currentPlan);
     fd.set('is_featured', isFeatured ? 'true' : 'false');
+    fd.set('p_score', String(pScore));
     // Send category ids as JSON array — use child if selected, otherwise parent
     const categoryId = selectedChildId || selectedParentId;
     fd.set('category_ids', JSON.stringify(categoryId ? [categoryId] : []));
@@ -548,7 +557,7 @@ export default function BusinessForm({
           </div>
 
           {/* Business Stats (edit mode only) */}
-          {!isNew && business && (
+          {!isNew && business && (<>
             <div className="bg-bg-card border border-border rounded-xl p-5 space-y-3">
               <label className="block text-sm font-medium">Business Stats</label>
               <div className="grid grid-cols-2 gap-3">
@@ -570,7 +579,34 @@ export default function BusinessForm({
                 </div>
               </div>
             </div>
-          )}
+
+            {/* Platform Score & Total Score */}
+            <div className="bg-bg-card border border-border rounded-xl p-5 space-y-4">
+              <label className="block text-sm font-medium">Ranking Score</label>
+
+              {/* P-Score input */}
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Platform Score (editor-adjustable)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="-10"
+                  max="50"
+                  value={pScore}
+                  onChange={(e) => setPScore(Number(e.target.value) || 0)}
+                  className="w-full h-10 px-3 text-sm border border-border rounded-lg bg-bg-page focus:border-primary focus:outline-none"
+                />
+                <p className="text-xs text-text-muted mt-1">Positive = boost ranking, Negative = demote. Default 0.</p>
+              </div>
+
+              {/* Total Score display */}
+              <div className="bg-bg-page rounded-lg p-4 text-center">
+                <p className="text-2xl font-bold text-primary">{computedTotalScore.toFixed(1)}</p>
+                <p className="text-xs text-text-muted mt-1">Total Score</p>
+                <p className="text-[11px] text-text-muted mt-2">= 6×Rating + 3×log(Reviews)×2 + P-Score</p>
+              </div>
+            </div>
+          </>)}
         </div>
       </div>
     </div>
