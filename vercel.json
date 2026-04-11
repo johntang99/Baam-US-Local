@@ -1,3 +1,3 @@
 {
-  "installCommand": "npm install --prefix ../.."
+  "installCommand": "npm cache clean --force && cd ../.. && npm install"
 }
