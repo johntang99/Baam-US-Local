@@ -1,3 +1,0 @@
-{
-  "installCommand": "rm -rf /vercel/.npm && cd ../.. && npm install"
-}
