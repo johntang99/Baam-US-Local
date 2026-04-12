@@ -2,16 +2,14 @@
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getCurrentSite } from '@/lib/sites';
-import { findCategoryId, detectTownRegionId } from '@/lib/helper/data';
+import { findCategoryId, detectTownRegionId, expandKeywordsFromSearchTerms } from '@/lib/helper/data';
 import type { MapBusiness } from '@/components/map/types';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyRow = Record<string, any>;
 
-// Town names are NOT generic for map — we need them for location filtering
 const GENERIC_WORDS = new Set(['best','good','top','recommend','find','near','nearby','place','places','local','what','where','how','the','are','any','in','can','get','does','there','some','like','want','looking','need','restaurants','shops','stores','about','from','anyone','people','this','that','with','for']);
 
-// Town names → region IDs for location filtering
 const TOWN_NAMES = new Set(['middletown','goshen','newburgh','monroe','warwick','chester','cornwall','wallkill','port jervis','pine bush']);
 
 function extractKeywords(search: string): string[] {
@@ -26,9 +24,13 @@ function detectTown(search: string): string | null {
   return null;
 }
 
+function titleCase(s: string): string {
+  return s.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
 export interface MapSearchResult {
   businesses: MapBusiness[];
-  matchedCategory: string | null; // category name that was matched from search
+  matchedCategory: string | null;
 }
 
 export async function fetchMapBusinesses(opts?: {
@@ -54,70 +56,71 @@ export async function fetchMapBusinesses(opts?: {
   let filteredByCategory = false;
   let matchedCategory: string | null = null;
 
+  // Detect town from search (used in both category and text search paths)
+  const town = opts?.search ? detectTown(opts.search) : null;
+  const townRegionId = town ? detectTownRegionId(opts?.search || '') : null;
+
   // Category filter (from pill buttons)
   if (opts?.categorySlug) {
-    const bizIds = await getCategoryBusinessIds(supabase, opts.categorySlug);
+    let bizIds = await getCategoryBusinessIds(supabase, opts.categorySlug);
+    // Apply town filter to category pill results too
+    if (town && bizIds.length > 0) {
+      bizIds = await filterByTown(supabase, site.id, bizIds, town, townRegionId);
+    }
     if (bizIds.length > 0) {
-      query = query.in('id', bizIds.slice(0, 100));
+      query = query.in('id', bizIds.slice(0, 200));
       filteredByCategory = true;
     } else {
       return { businesses: [], matchedCategory: null };
     }
   }
 
-  // Search: use Helper's smart category + town matching
+  // Search: use Helper's smart category + keyword expansion + town matching
   if (opts?.search && !filteredByCategory) {
-    // Detect town name for location filtering
-    const town = detectTown(opts.search);
-    const townRegionId = town ? detectTownRegionId(opts.search) : null;
+    // Extract keywords (strip town names)
+    const rawKeywords = extractKeywords(opts.search).filter(kw => !TOWN_NAMES.has(kw));
 
-    // Extract keywords (strip town names so they don't confuse category matching)
-    const allKeywords = extractKeywords(opts.search);
-    const keywords = allKeywords.filter(kw => !TOWN_NAMES.has(kw));
-
-    if (keywords.length > 0) {
-      // Try category matching first (same algorithm as Helper)
-      const category = await findCategoryId(supabase, site.id, keywords, opts.search);
+    if (rawKeywords.length > 0) {
+      // 1. Try category matching (same algorithm as Helper)
+      const category = await findCategoryId(supabase, site.id, rawKeywords, opts.search);
 
       if (category) {
-        // Found a category match — filter by category
         let bizIds = await getCategoryBusinessIdsById(supabase, category.id);
 
-        // If town is specified, pre-filter IDs by town address BEFORE slicing
-        // This prevents the 100-ID slice from missing town-specific results
-        if (town && bizIds.length > 100) {
-          const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-          const { data: townBiz } = await supabase.from('businesses')
-            .select('id').eq('is_active', true).eq('site_id', site.id)
-            .in('id', bizIds.slice(0, 500))
-            .ilike('address_full', `%${capitalize(town)}%`);
-          if (townBiz && townBiz.length > 0) {
-            bizIds = townBiz.map((b: AnyRow) => String(b.id));
-            matchedCategory = `${category.name} in ${capitalize(town)}`;
+        // Apply town filter via region_id (reliable) with address_full fallback
+        if (town && bizIds.length > 0) {
+          const filtered = await filterByTown(supabase, site.id, bizIds, town, townRegionId);
+          if (filtered.length > 0) {
+            bizIds = filtered;
+            matchedCategory = `${category.name} in ${titleCase(town)}`;
           }
         }
 
         if (bizIds.length > 0) {
-          query = query.in('id', bizIds.slice(0, 100));
+          query = query.in('id', bizIds.slice(0, 200));
           filteredByCategory = true;
           if (!matchedCategory) matchedCategory = category.name;
         }
       }
 
-      // If no category match, try text search on name + description
+      // 2. If no category match, try expanded keyword text search
       if (!filteredByCategory) {
-        const orClauses = keywords.map(kw =>
+        const expanded = await expandKeywordsFromSearchTerms(supabase, rawKeywords);
+        const orClauses = expanded.map(kw =>
           `display_name.ilike.%${kw}%,short_desc_en.ilike.%${kw}%`
         ).join(',');
         query = query.or(orClauses);
-      }
-    }
 
-    // Apply town filter for non-category searches (text search fallback)
-    if (town && !filteredByCategory) {
-      const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-      query = query.ilike('address_full', `%${capitalize(town)}%`);
-      matchedCategory = matchedCategory ? `${matchedCategory} in ${capitalize(town)}` : `in ${capitalize(town)}`;
+        // Apply town filter for text search results
+        if (town) {
+          query = query.ilike('address_full', `%${titleCase(town)}%`);
+          matchedCategory = `"${rawKeywords.join(' ')}" in ${titleCase(town)}`;
+        }
+      }
+    } else if (town) {
+      // Only a town name with no other keywords — show all businesses in that town
+      query = query.ilike('address_full', `%${titleCase(town)}%`);
+      matchedCategory = `in ${titleCase(town)}`;
     }
   }
 
@@ -145,6 +148,34 @@ export async function fetchMapBusinesses(opts?: {
 
 // ─── Helpers ──────────────────────────────────────────
 
+/** Filter business IDs by town — uses region_id (reliable) with address_full fallback */
+async function filterByTown(supabase: AnyRow, siteId: string, bizIds: string[], town: string, regionId: string | null): Promise<string[]> {
+  // Try region_id first (most reliable — uses business_locations table)
+  if (regionId) {
+    const { data: townLocs } = await supabase
+      .from('business_locations')
+      .select('business_id')
+      .eq('region_id', regionId)
+      .limit(5000);
+    const townBizIdSet = new Set((townLocs || []).map((l: AnyRow) => String(l.business_id)));
+    const filtered = bizIds.filter(id => townBizIdSet.has(id));
+    if (filtered.length > 0) return filtered;
+  }
+
+  // Fallback: address_full text match
+  const townName = titleCase(town);
+  const CHUNK = 200;
+  const matched: string[] = [];
+  for (let i = 0; i < bizIds.length; i += CHUNK) {
+    const { data } = await supabase.from('businesses')
+      .select('id').eq('is_active', true).eq('site_id', siteId)
+      .in('id', bizIds.slice(i, i + CHUNK))
+      .ilike('address_full', `%${townName}%`);
+    if (data) matched.push(...data.map((b: AnyRow) => String(b.id)));
+  }
+  return matched;
+}
+
 async function getCategoryBusinessIds(supabase: AnyRow, categorySlug: string): Promise<string[]> {
   const { data: cat } = await supabase
     .from('categories')
@@ -158,7 +189,7 @@ async function getCategoryBusinessIds(supabase: AnyRow, categorySlug: string): P
   return getCategoryBusinessIdsById(supabase, cat.id);
 }
 
-async function getCategoryBusinessIdsById(supabase: AnyRow, categoryId: string): Promise<string[]> { // eslint-disable-line @typescript-eslint/no-explicit-any
+async function getCategoryBusinessIdsById(supabase: AnyRow, categoryId: string): Promise<string[]> {
   // Get child categories too
   const { data: children } = await supabase
     .from('categories')

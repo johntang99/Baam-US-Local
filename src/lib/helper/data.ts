@@ -27,41 +27,77 @@ export async function fetchCategoryBusinesses(
 ): Promise<{ businesses: BusinessResult[]; locationFallback: boolean }> {
   const bizFields = 'id, slug, display_name, short_desc_en, ai_tags, avg_rating, review_count, phone, address_full, total_score, is_featured, latitude, longitude';
 
+  // Include child categories if this is a parent category
+  const { data: childCats } = await supabase
+    .from('categories')
+    .select('id, slug')
+    .eq('parent_id', categoryId);
+
+  let catIds: string[];
+  if (childCats && childCats.length > 0) {
+    // This is a parent category — check if it's food-dining
+    // Exclude non-restaurant subcategories (grocery, liquor, coffee, catering, food truck, butcher)
+    // These belong to different directory groups and shouldn't appear in "restaurant" queries
+    const { data: parentCat } = await supabase.from('categories').select('slug').eq('id', categoryId).single();
+    const isFoodParent = parentCat?.slug === 'food-dining';
+    const NON_RESTAURANT_SLUGS = new Set([
+      'food-grocery', 'food-liquor-store', 'food-coffee', 'food-catering',
+      'food-food-truck', 'food-butcher-market',
+    ]);
+    const filteredChildren = isFoodParent
+      ? childCats.filter((c: { slug: string }) => !NON_RESTAURANT_SLUGS.has(c.slug))
+      : childCats;
+    catIds = [categoryId, ...filteredChildren.map((c: { id: string }) => c.id)];
+  } else {
+    catIds = [categoryId];
+  }
+
   const { data: bizLinks } = await supabase
     .from('business_categories')
     .select('business_id')
-    .eq('category_id', categoryId)
-    .limit(500);
+    .in('category_id', catIds)
+    .limit(5000);
 
-  const bizIds = [...new Set((bizLinks || []).map((l: { business_id: string }) => l.business_id))];
+  let bizIds = [...new Set((bizLinks || []).map((l: { business_id: string }) => l.business_id))];
   if (bizIds.length === 0) return { businesses: [], locationFallback: false };
 
-  const { data: businesses } = await supabase
-    .from('businesses')
-    .select(bizFields)
-    .eq('is_active', true)
-    .eq('site_id', siteId)
-    .in('id', bizIds.slice(0, 200))
-    .order('total_score', { ascending: false, nullsFirst: false })
-    .limit(30);
-
-  let results = (businesses || []) as AnyRow[];
   let locationFallback = false;
 
+  // If town filter is set, pre-filter business IDs by town BEFORE fetching details
+  // This ensures we get the top-scored businesses IN the town, not a random slice
   if (townRegionId) {
     const { data: townLocs } = await supabase
       .from('business_locations')
       .select('business_id')
       .eq('region_id', townRegionId)
       .limit(5000);
-    const townBizIds = new Set((townLocs || []).map((l: { business_id: string }) => l.business_id));
-    const townFiltered = results.filter((b) => townBizIds.has(b.id as string));
+    const townBizIdSet = new Set((townLocs || []).map((l: { business_id: string }) => l.business_id));
+    const townFiltered = bizIds.filter(id => townBizIdSet.has(id));
     if (townFiltered.length > 0) {
-      results = townFiltered;
+      bizIds = townFiltered;
     } else {
       locationFallback = true;
+      // Keep all bizIds — no town match, show broader results
     }
   }
+
+  // Fetch businesses in chunks to handle large sets, then sort by total_score
+  const CHUNK = 200;
+  let allBiz: AnyRow[] = [];
+  for (let i = 0; i < Math.min(bizIds.length, 1000); i += CHUNK) {
+    const { data } = await supabase
+      .from('businesses')
+      .select(bizFields)
+      .eq('is_active', true)
+      .eq('site_id', siteId)
+      .in('id', bizIds.slice(i, i + CHUNK));
+    if (data) allBiz.push(...data);
+  }
+
+  // Sort all by total_score and take top 30
+  let results = allBiz
+    .sort((a, b) => (Number(b.total_score) || 0) - (Number(a.total_score) || 0))
+    .slice(0, 30);
 
   return {
     locationFallback,

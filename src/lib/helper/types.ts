@@ -26,6 +26,8 @@ export interface BusinessResult {
   address_full: string | null;
   total_score: number;
   ai_tags: string[];
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface ContentItem {
@@ -93,7 +95,7 @@ export const GENERIC_WORDS = new Set([
   'place', 'places', 'local', 'middletown', 'goshen', 'newburgh',
   'monroe', 'what', 'where', 'how', 'the', 'are', 'any', 'in',
   'can', 'get', 'does', 'there', 'some', 'like', 'want',
-  'looking', 'need', 'restaurants', 'shops', 'stores',
+  'looking', 'need', 'shops', 'stores', 'please', 'list', 'show',
   'about', 'from', 'anyone', 'people', 'think', 'know',
   'tell', 'think', 'opinions', 'thoughts', 'recommendations',
   'recently', 'lately', 'really', 'also', 'very', 'much',

@@ -123,13 +123,30 @@ export async function askHelper(
       return logResult({ data: result });
     }
 
+    // ─── Helper: build mapBusinesses from any business array ───
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const toMapBusinesses = (businesses: any[]) => {
+      const mapped = businesses.filter((b) => b.latitude && b.longitude).map((b) => ({
+        id: b.id, slug: b.slug, display_name: b.display_name,
+        short_desc_en: b.short_desc_en || '', avg_rating: b.avg_rating,
+        review_count: b.review_count, phone: b.phone,
+        address_full: b.address_full, latitude: Number(b.latitude),
+        longitude: Number(b.longitude), ai_tags: b.ai_tags || [],
+        total_score: b.total_score || 0, is_featured: !!b.is_featured,
+      }));
+      return mapped.length > 0 ? mapped : undefined;
+    };
+
     // ─── Type 9: Specific Business Lookup ────────────────
     if (alloc.type === 'business-lookup') {
       const { answer, sources } = buildBusinessLookup(alloc, query);
+      // Single business → show on map if it has coordinates
+      const singleBiz = alloc.singleBusiness;
       return logResult({
         data: {
           answer, sources, intent: 'localLookup', keywords: alloc.keywords, usedWebFallback: false, provider: 'template',
-          quickReplies: getQuickReplies('business-lookup', alloc.keywords, { bizName: alloc.singleBusiness?.display_name }),
+          quickReplies: getQuickReplies('business-lookup', alloc.keywords, { bizName: singleBiz?.display_name }),
+          mapBusinesses: singleBiz ? toMapBusinesses([singleBiz]) : undefined,
         },
       });
     }
@@ -160,9 +177,12 @@ export async function askHelper(
     if (alloc.type === 'comparison') {
       const { answer, sources } = buildComparisonAnswer(alloc);
       const pairNames = alloc.comparisonPair ? [alloc.comparisonPair[0].display_name, alloc.comparisonPair[1].display_name] as [string, string] : undefined;
+      // Show both businesses on map
+      const compMapBiz = alloc.comparisonPair ? toMapBusinesses([alloc.comparisonPair[0], alloc.comparisonPair[1]]) : undefined;
       return logResult({
         data: { answer, sources, intent: 'comparison', keywords: alloc.keywords, usedWebFallback: false, provider: 'template',
           quickReplies: getQuickReplies('comparison', alloc.keywords, { pairNames }),
+          mapBusinesses: compMapBiz,
         },
       });
     }
@@ -177,12 +197,29 @@ export async function askHelper(
       }
 
       const townRegionId = detectTownRegionId(query);
-      const { businesses, locationFallback } = await fetchCategoryBusinesses(supabase, site.id, category.id, townRegionId);
+      const { businesses: rawBusinesses, locationFallback } = await fetchCategoryBusinesses(supabase, site.id, category.id, townRegionId);
       const related = await fetchRelatedContent(supabase, site.id, alloc.keywords);
 
-      if (businesses.length === 0) {
+      if (rawBusinesses.length === 0) {
         const { answer, sources } = buildNoMatch(query, alloc.keywords);
         return logResult({ data: { answer, sources, intent: 'localRecommendation', keywords: alloc.keywords, usedWebFallback: false, provider: 'template', quickReplies: getQuickReplies('no-match', alloc.keywords) } });
+      }
+
+      // Boost businesses whose name/description matches search keywords — demote generic chains
+      // Skip this for parent categories (e.g. "best restaurants" → food-dining) since all results are relevant
+      const { data: hasChildren } = await supabase.from('categories').select('id').eq('parent_id', category.id).limit(1);
+      const isParentCategory = hasChildren && hasChildren.length > 0;
+
+      const expandedKws = await expandKeywordsFromSearchTerms(supabase, alloc.keywords);
+      let businesses = rawBusinesses;
+      if (!isParentCategory && expandedKws.length > 0 && rawBusinesses.length > 3) {
+        const relevant = rawBusinesses.filter(b => {
+          const text = [b.display_name, b.short_desc_en, ...(b.ai_tags || [])].join(' ').toLowerCase();
+          return expandedKws.some(kw => text.includes(kw));
+        });
+        const irrelevant = rawBusinesses.filter(b => !relevant.includes(b));
+        // Show relevant first, then fill with remaining (don't drop them entirely)
+        businesses = [...relevant, ...irrelevant];
       }
 
       const enrichedAlloc = {
@@ -194,16 +231,6 @@ export async function askHelper(
       };
 
       const { answer, sources } = buildBusinessRecommendation(enrichedAlloc);
-      // Build map data for businesses with coordinates
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mapBiz = (businesses as any[]).filter((b) => b.latitude && b.longitude).map((b) => ({
-        id: b.id, slug: b.slug, display_name: b.display_name,
-        short_desc_en: b.short_desc_en || '', avg_rating: b.avg_rating,
-        review_count: b.review_count, phone: b.phone,
-        address_full: b.address_full, latitude: Number(b.latitude),
-        longitude: Number(b.longitude), ai_tags: b.ai_tags || [],
-        total_score: b.total_score || 0, is_featured: !!b.is_featured,
-      }));
       return logResult({
         data: {
           answer, sources, intent: 'localRecommendation', keywords: alloc.keywords, usedWebFallback: false, provider: 'template',
@@ -211,7 +238,7 @@ export async function askHelper(
             category: category.name,
             topBizNames: businesses.slice(0, 2).map(b => b.display_name),
           }),
-          mapBusinesses: mapBiz.length > 0 ? mapBiz : undefined,
+          mapBusinesses: toMapBusinesses(businesses),
         },
       });
     }
@@ -348,6 +375,7 @@ export async function askHelper(
           quickReplies: getQuickReplies(alloc.type, alloc.keywords, {
             topBizNames: enrichedAlloc.businesses.slice(0, 2).map(b => b.display_name),
           }),
+          mapBusinesses: businesses.length > 0 ? toMapBusinesses(businesses) : undefined,
         },
       });
     }

@@ -48,12 +48,84 @@ const sourceTypeMeta: Record<string, { icon: string; badgeClass: string }> = {
   '网页': { icon: '🌐', badgeClass: 'bg-slate-50 text-slate-700 border-slate-200' },
 };
 
-const SUGGESTED_QUESTIONS = [
-  'Best pizza places in Middletown?',
-  'How do I register my car in New York?',
-  'Any family-friendly events this weekend?',
-  'Recommend a good dentist near Goshen',
-  'What do I need to know about property taxes?',
+const QUESTION_CATEGORIES = [
+  {
+    icon: '🍕',
+    label: 'Food & Dining',
+    questions: [
+      'Please list the Best restaurants in Middletown?',
+      'Best pizza in Middletown for a family dinner?',
+      'Where can I get good seafood in Middletown?',
+      'Best steakhouse in Middletown?',
+    ],
+  },
+  {
+    icon: '🏥',
+    label: 'Health & Medical',
+    questions: [
+      'My tooth has been hurting, who should I see?',
+      'Need a pediatrician in Middletown for my 3-year-old',
+      'Any good chiropractors near Middletown?',
+      'Where can I get an eye exam and glasses?',
+    ],
+  },
+  {
+    icon: '🏠',
+    label: 'Home Services',
+    questions: [
+      'My sink is leaking, who should I call?',
+      'Need a reliable electrician in Middletown',
+      'Looking for a house cleaning service',
+      'Who does the best landscaping around here?',
+    ],
+  },
+  {
+    icon: '⚖️',
+    label: 'Legal & Finance',
+    questions: [
+      'I got a speeding ticket, what should I do?',
+      'Need help with my immigration case',
+      'Looking for a good tax preparer in Middletown',
+      'Who can help me with estate planning?',
+    ],
+  },
+  {
+    icon: '🚗',
+    label: 'Auto & Transport',
+    questions: [
+      'Where can I get my car inspected in Middletown?',
+      'My car broke down, who does affordable repairs?',
+      'Best place for an oil change near Goshen?',
+    ],
+  },
+  {
+    icon: '👶',
+    label: 'Family & Education',
+    questions: [
+      "Looking for daycare that's open on weekends",
+      'Good martial arts classes for kids in Middletown?',
+      'Any music lessons for beginners nearby?',
+    ],
+  },
+  {
+    icon: '💇',
+    label: 'Beauty & Wellness',
+    questions: [
+      'Where can I get a good haircut in Middletown?',
+      'Best nail salon in the area?',
+      'Looking for a spa day — any recommendations?',
+    ],
+  },
+  {
+    icon: '📋',
+    label: 'Guides & Info',
+    questions: [
+      'How do I register my car in New York?',
+      'What do I need to know about property taxes?',
+      'We just moved here, what should we know?',
+      "What's fun to do this weekend with kids?",
+    ],
+  },
 ];
 
 const LOADING_MESSAGES = [
@@ -90,8 +162,11 @@ function nodeContainsAnchor(node: unknown): boolean {
   if (!node) return false;
   if (Array.isArray(node)) return node.some((item) => nodeContainsAnchor(item));
   if (typeof node === 'object') {
-    const maybeNode = node as { type?: unknown; props?: { children?: unknown } };
-    if (maybeNode.type === 'a') return true;
+    const maybeNode = node as { type?: unknown; props?: { href?: unknown; children?: unknown } };
+    // Check both element type and if it has href (covers custom components)
+    if (maybeNode.type === 'a' || maybeNode.props?.href) return true;
+    // Check type name for function components
+    if (typeof maybeNode.type === 'function' && (maybeNode.type as { name?: string }).name === 'a') return true;
     return nodeContainsAnchor(maybeNode.props?.children);
   }
   return false;
@@ -168,8 +243,11 @@ const markdownComponents: Components = {
     return <a href={href} target="_blank" rel="noopener noreferrer" {...props} className="underline underline-offset-2">{children}</a>;
   },
   td: ({ children, ...props }) => {
+    // Never wrap if children already contain a link (prevents <a> inside <a>)
     if (nodeContainsAnchor(children)) return <td {...props}>{children}</td>;
     const text = nodeToText(children).replace(/\s+/g, ' ').trim();
+    // Skip auto-linking if text is too short or looks like it contains URL/link artifacts
+    if (text.length < 5 || /https?:\/\//.test(text)) return <td {...props}>{children}</td>;
     const phone = extractPhone(text);
     if (phone) {
       const normalized = normalizePhone(phone);
@@ -265,6 +343,11 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
         setMessages((prev) => prev.map((m) => m.id === messageId ? { ...m, content: fullContent.slice(0, index) } : m));
       }
       setMessages((prev) => prev.map((m) => m.id === messageId ? { ...m, content: fullContent, fullContent: undefined, ...meta } : m));
+      // Auto-enable Map View + List mode for messages with map data
+      if (meta.mapBusinesses && meta.mapBusinesses.length > 0) {
+        setMapView((prev) => ({ ...prev, [messageId]: true }));
+        setMapListMode((prev) => ({ ...prev, [messageId]: true }));
+      }
       setRenderingAnswer(false);
       inputRef.current?.focus();
     },
@@ -296,6 +379,7 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
 
     const data = result.data;
     const assistantId = `a-${Date.now()}`;
+    // Don't add empty message — progressive render will add content directly
     setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', content: '', fullContent: data.answer }]);
     setLoading(false);
     await progressivelyRenderAnswer(assistantId, data.answer, {
@@ -305,31 +389,75 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
     });
   }
 
+  function handleNewChat() {
+    setMessages([]);
+    setInput('');
+    setLoading(false);
+    setRenderingAnswer(false);
+    setFeedbackSent({});
+    setMapView({});
+    setMapSelectedId(null);
+    setMapExpandedId(null);
+    setMapListMode({});
+    // Clear URL query param
+    const url = new URL(window.location.href);
+    url.searchParams.delete('q');
+    window.history.replaceState({}, '', url.toString());
+    inputRef.current?.focus();
+  }
+
   return (
     <div>
+      {/* New Chat button — shown when conversation has messages */}
+      {messages.length > 0 && !loading && !renderingAnswer && (
+        <div className="max-w-3xl mx-auto flex justify-end mb-3">
+          <button type="button" onClick={handleNewChat}
+            className="flex items-center gap-1.5 text-xs font-medium text-text-muted hover:text-primary px-3 py-1.5 rounded-lg border border-border hover:border-primary/30 transition-colors">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+            New Chat
+          </button>
+        </div>
+      )}
+
       <div className="space-y-4 pb-20 min-h-[220px]">
         {messages.length === 0 && !loading && !renderingAnswer && (
-          <div className="text-center py-8">
-            <p className="text-text-muted text-sm mb-6">
-              Ask me anything about the local community — businesses, events, guides, and more.
+          <div className="max-w-6xl mx-auto">
+            <p className="text-center text-text-muted text-sm mb-6">
+              What can I help you with today?
             </p>
-            <div className="flex flex-wrap justify-center gap-2">
-              {SUGGESTED_QUESTIONS.map((q) => (
-                <button key={q} type="button" onClick={() => void handleAsk(q)} disabled={loading}
-                  className="text-xs bg-border-light text-text-secondary px-3 py-1.5 rounded-full hover:bg-primary/10 hover:text-primary transition disabled:opacity-50">
-                  {q}
-                </button>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {QUESTION_CATEGORIES.map((cat) => (
+                <div key={cat.label} className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 px-1 mb-2">
+                    <span className="text-base">{cat.icon}</span>
+                    <span className="text-xs font-semibold text-text-secondary">{cat.label}</span>
+                  </div>
+                  {cat.questions.map((q) => (
+                    <button key={q} type="button" onClick={() => void handleAsk(q)} disabled={loading}
+                      className="w-full text-left text-[13px] leading-snug text-text-primary bg-bg-card border border-border rounded-xl px-3 py-2.5 hover:border-primary/40 hover:text-primary hover:bg-primary/5 transition-colors disabled:opacity-50">
+                      &ldquo;{q}&rdquo;
+                    </button>
+                  ))}
+                </div>
               ))}
             </div>
+            <p className="text-center text-[11px] text-text-muted mt-6">
+              💡 Or just type anything — I know about 12,000+ local businesses, guides, events, and more
+            </p>
           </div>
         )}
 
-        {messages.map((message, msgIdx) => (
+        {/* Messages area — narrower for readability */}
+        <div className="max-w-3xl mx-auto space-y-4">
+        {messages.map((message, msgIdx) => {
+          // Skip empty assistant messages (content fills in progressively; loading indicator handles this state)
+          if (message.role === 'assistant' && !message.content) return null;
+          return (
           <div key={message.id} ref={msgIdx === messages.length - 1 ? lastMsgRef : undefined} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[90%] ${message.role === 'user' ? 'bg-primary text-white rounded-2xl rounded-br-md px-4 py-3' : 'bg-bg-card border border-border rounded-2xl rounded-bl-md px-5 py-4'}`}>
-              {message.role === 'assistant' && (
+              {message.role === 'assistant' && message.content.length > 10 && (
                 <div className="flex items-center gap-2 mb-2">
-                  <span className="text-sm">🤖</span>
+                  <span className="text-sm">👩‍💼</span>
                   <span className="text-xs font-medium text-primary">Helper</span>
                   {message.usedWebFallback && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">+ web</span>
@@ -432,14 +560,28 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
                 </>
               )}
 
-              {/* Content (list view or when no map data) */}
-              {(!mapView[message.id] || !message.mapBusinesses || message.fullContent) && (
-                <div className="text-[15px] leading-7 prose prose-sm max-w-none prose-p:my-3 prose-li:my-1 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-[15px] [&_h3]:font-bold [&_h3]:mt-10 [&_h3]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_hr]:my-10">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                    {message.content}
-                  </ReactMarkdown>
-                </div>
-              )}
+              {/* Content — always shown; in map view, strip business tables to avoid duplication */}
+              {!message.fullContent && (() => {
+                let content = message.content;
+                // When map view is active and showing businesses, remove markdown tables
+                // (the map + business cards already display them)
+                // Exception: comparison type — keep the side-by-side comparison table
+                if (mapView[message.id] && message.mapBusinesses && message.mapBusinesses.length > 1 && message.answerType !== 'comparison') {
+                  // Strip markdown tables: header row + separator row + data rows
+                  content = content.replace(/\n*\|[^\n]+\|\n\|[\s:|-]+\|\n(?:\|[^\n]+\|\n?)*/gm, '\n');
+                  // Strip "Recommended X" or "Top X" headers that preceded the table
+                  content = content.replace(/\n*#{1,3}\s*(?:🏪|📋|🔍)?\s*(?:Recommended|Top \d+|Here are)[^\n]*\n*/gi, '\n');
+                  // Clean up multiple blank lines
+                  content = content.replace(/\n{3,}/g, '\n\n').trim();
+                }
+                return (
+                  <div className="text-[15px] leading-7 prose prose-sm max-w-none prose-p:my-3 prose-li:my-1 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-[15px] [&_h3]:font-bold [&_h3]:mt-10 [&_h3]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_hr]:my-10">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                      {content}
+                    </ReactMarkdown>
+                  </div>
+                );
+              })()}
 
               {message.sources && message.sources.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-border">
@@ -517,13 +659,14 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {(loading || renderingAnswer) && (
           <div className="flex justify-start">
             <div className="bg-bg-card border border-border rounded-2xl rounded-bl-md px-4 py-3">
               <div className="flex items-center gap-2">
-                <span className="text-sm">🤖</span>
+                <span className="text-sm">👩‍💼</span>
                 <div className="flex gap-1">
                   <div className="w-2 h-2 bg-primary/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                   <div className="w-2 h-2 bg-primary/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -536,9 +679,10 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
         )}
 
         <div />
+        </div>{/* end max-w-3xl messages wrapper */}
       </div>
 
-      <form onSubmit={(e) => { e.preventDefault(); void handleAsk(input); }} className="sticky bottom-4">
+      <form onSubmit={(e) => { e.preventDefault(); void handleAsk(input); }} className="sticky bottom-4 max-w-3xl mx-auto">
         <div className="flex gap-2 bg-bg-card border border-border rounded-xl p-2 shadow-lg">
           <input
             ref={inputRef} type="text" value={input}

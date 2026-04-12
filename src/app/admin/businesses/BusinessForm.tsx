@@ -48,26 +48,45 @@ const inputClass = 'w-full h-10 px-3 border border-border rounded-lg text-sm foc
 const textareaClass = 'w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary resize-y';
 const selectClass = 'w-full h-10 px-3 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white';
 
-function initCategorySelection(
+interface CategoryPair {
+  parentId: string;
+  childId: string;
+}
+
+function initCategoryPairs(
   categoryTree: CategoryTreeItem[],
   selectedCategoryIds: string[]
-): { parentId: string; childId: string } {
-  if (selectedCategoryIds.length === 0) return { parentId: '', childId: '' };
+): CategoryPair[] {
+  if (selectedCategoryIds.length === 0) return [{ parentId: '', childId: '' }];
 
-  // Check if the selected ID is a child category
-  for (const { parent, children } of categoryTree) {
-    for (const child of children) {
-      if (selectedCategoryIds.includes(child.id)) {
-        return { parentId: parent.id, childId: child.id };
+  const pairs: CategoryPair[] = [];
+  const usedIds = new Set<string>();
+
+  for (const catId of selectedCategoryIds) {
+    if (usedIds.has(catId)) continue;
+
+    // Check if it's a child category
+    let found = false;
+    for (const { parent, children } of categoryTree) {
+      for (const child of children) {
+        if (child.id === catId) {
+          pairs.push({ parentId: parent.id, childId: child.id });
+          usedIds.add(catId);
+          found = true;
+          break;
+        }
       }
-    }
-    // Check if the selected ID is a parent category
-    if (selectedCategoryIds.includes(parent.id)) {
-      return { parentId: parent.id, childId: '' };
+      if (found) break;
+      // Check if it's a parent category
+      if (parent.id === catId) {
+        pairs.push({ parentId: parent.id, childId: '' });
+        usedIds.add(catId);
+        break;
+      }
     }
   }
 
-  return { parentId: '', childId: '' };
+  return pairs.length > 0 ? pairs : [{ parentId: '', childId: '' }];
 }
 
 export default function BusinessForm({
@@ -125,17 +144,37 @@ export default function BusinessForm({
   const reviewCount = business?.review_count ? Number(business.review_count) : 0;
   const computedTotalScore = 6 * avgRating + 3 * (Math.log10(Math.max(reviewCount + 1, 1) + 1) * 2) + 1 * pScore;
 
-  // Categories — sequential dropdowns
-  const initCat = initCategorySelection(categoryTree, initialSelectedCategoryIds);
-  const [selectedParentId, setSelectedParentId] = useState(initCat.parentId);
-  const [selectedChildId, setSelectedChildId] = useState(initCat.childId);
+  // Categories — multiple category pairs
+  const [categoryPairs, setCategoryPairs] = useState<CategoryPair[]>(
+    initCategoryPairs(categoryTree, initialSelectedCategoryIds)
+  );
 
   const parentCategories = categoryTree;
-  const childCategories = categoryTree.find((c) => c.parent.id === selectedParentId)?.children || [];
 
-  const handleParentChange = (parentId: string) => {
-    setSelectedParentId(parentId);
-    setSelectedChildId(''); // reset child when parent changes
+  const getChildCategories = (parentId: string) =>
+    categoryTree.find((c) => c.parent.id === parentId)?.children || [];
+
+  const updatePair = (index: number, field: 'parentId' | 'childId', value: string) => {
+    setCategoryPairs(prev => {
+      const updated = [...prev];
+      if (field === 'parentId') {
+        updated[index] = { parentId: value, childId: '' }; // reset child when parent changes
+      } else {
+        updated[index] = { ...updated[index], childId: value };
+      }
+      return updated;
+    });
+  };
+
+  const addCategoryPair = () => {
+    setCategoryPairs(prev => [...prev, { parentId: '', childId: '' }]);
+  };
+
+  const removeCategoryPair = (index: number) => {
+    setCategoryPairs(prev => {
+      if (prev.length <= 1) return [{ parentId: '', childId: '' }]; // always keep at least one
+      return prev.filter((_, i) => i !== index);
+    });
   };
 
   const buildFormData = () => {
@@ -162,9 +201,11 @@ export default function BusinessForm({
     fd.set('current_plan', currentPlan);
     fd.set('is_featured', isFeatured ? 'true' : 'false');
     fd.set('p_score', String(pScore));
-    // Send category ids as JSON array — use child if selected, otherwise parent
-    const categoryId = selectedChildId || selectedParentId;
-    fd.set('category_ids', JSON.stringify(categoryId ? [categoryId] : []));
+    // Send all category ids as JSON array — for each pair, use child if selected, otherwise parent
+    const categoryIds = categoryPairs
+      .map(pair => pair.childId || pair.parentId)
+      .filter(Boolean);
+    fd.set('category_ids', JSON.stringify([...new Set(categoryIds)])); // deduplicate
     return fd;
   };
 
@@ -506,41 +547,73 @@ export default function BusinessForm({
             </select>
           </div>
 
-          {/* Categories — sequential dropdowns */}
+          {/* Categories — multiple category pairs */}
           <div className="bg-bg-card border border-border rounded-xl p-5 space-y-4">
-            <label className="block text-sm font-medium">Category</label>
-            <div>
-              <label className="block text-xs text-text-muted mb-1">Main Category</label>
-              <select
-                value={selectedParentId}
-                onChange={(e) => handleParentChange(e.target.value)}
-                className={selectClass}
-              >
-                <option value="">Select a category</option>
-                {parentCategories.map(({ parent }) => (
-                  <option key={parent.id} value={parent.id}>
-                    {parent.name_zh || parent.name_en || parent.slug}
-                  </option>
-                ))}
-              </select>
+            <div className="flex items-center justify-between">
+              <label className="block text-sm font-medium">Categories</label>
+              <span className="text-xs text-text-muted">{categoryPairs.filter(p => p.parentId).length} assigned</span>
             </div>
-            {selectedParentId && childCategories.length > 0 && (
-              <div>
-                <label className="block text-xs text-text-muted mb-1">Subcategory</label>
-                <select
-                  value={selectedChildId}
-                  onChange={(e) => setSelectedChildId(e.target.value)}
-                  className={selectClass}
-                >
-                  <option value="">Select a subcategory</option>
-                  {childCategories.map((child) => (
-                    <option key={child.id} value={child.id}>
-                      {child.name_zh || child.name_en || child.slug}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+
+            {categoryPairs.map((pair, index) => {
+              const children = getChildCategories(pair.parentId);
+              return (
+                <div key={index} className="relative border border-border/60 rounded-lg p-3 space-y-2 bg-bg-page/50">
+                  {categoryPairs.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeCategoryPair(index)}
+                      className="absolute top-2 right-2 text-text-muted hover:text-red-500 text-xs font-medium transition-colors"
+                      title="Remove this category"
+                    >
+                      ✕
+                    </button>
+                  )}
+                  <div>
+                    <label className="block text-xs text-text-muted mb-1">
+                      Main Category {categoryPairs.length > 1 ? `#${index + 1}` : ''}
+                    </label>
+                    <select
+                      value={pair.parentId}
+                      onChange={(e) => updatePair(index, 'parentId', e.target.value)}
+                      className={selectClass}
+                    >
+                      <option value="">Select a category</option>
+                      {parentCategories.map(({ parent }) => (
+                        <option key={parent.id} value={parent.id}>
+                          {parent.name_en || parent.name_zh || parent.slug}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {pair.parentId && children.length > 0 && (
+                    <div>
+                      <label className="block text-xs text-text-muted mb-1">Subcategory</label>
+                      <select
+                        value={pair.childId}
+                        onChange={(e) => updatePair(index, 'childId', e.target.value)}
+                        className={selectClass}
+                      >
+                        <option value="">Select a subcategory</option>
+                        {children.map((child) => (
+                          <option key={child.id} value={child.id}>
+                            {child.name_en || child.name_zh || child.slug}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            <button
+              type="button"
+              onClick={addCategoryPair}
+              className="flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+              Add another category
+            </button>
           </div>
 
           {/* Is Featured */}

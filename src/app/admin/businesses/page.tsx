@@ -155,7 +155,7 @@ export default async function AdminBusinessesPage({ searchParams }: Props) {
     totalCount = count ?? businesses.length;
   }
 
-  // Fetch categories for displayed businesses
+  // Fetch categories for displayed businesses (show all, not just primary)
   const bizCategoryMap: Record<string, string> = {};
   if (businesses.length > 0) {
     const bizIds = businesses.map((b: AnyRow) => b.id);
@@ -163,13 +163,18 @@ export default async function AdminBusinessesPage({ searchParams }: Props) {
       .from('business_categories')
       .select('business_id, categories(name_en)')
       .in('business_id', bizIds)
-      .eq('is_primary', true)
       .limit(10000);
+    // Group by business_id, join category names
+    const bizCatNames = new Map<string, string[]>();
     (bcRows || []).forEach((row: AnyRow) => {
       if (row.categories?.name_en) {
-        bizCategoryMap[row.business_id] = row.categories.name_en;
+        if (!bizCatNames.has(row.business_id)) bizCatNames.set(row.business_id, []);
+        bizCatNames.get(row.business_id)!.push(row.categories.name_en);
       }
     });
+    for (const [bizId, names] of bizCatNames) {
+      bizCategoryMap[bizId] = names.join(', ');
+    }
   }
 
   const from = (page - 1) * pageSize;

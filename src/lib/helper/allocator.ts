@@ -29,18 +29,41 @@ function detectTypeByPattern(query: string, history: HelperMessage[]): AnswerTyp
   if (/\bvs\.?\b|\bversus\b|\bcompare\b|\bdifference between\b/.test(q)) return 'comparison';
   if (/\bor\b.*\b(better|which|prefer)\b|\b(better|which|prefer)\b.*\bor\b/.test(q)) return 'comparison';
 
-  // Type 11: Life event — but NOT if query also mentions a specific service
-  // "moving to Middletown" = life-event, "moving to Middletown need a plumber" = mixed (has specific service)
+  // Type 9: Business lookup — specific business name + info request
+  if (/^(phone|number|hours|address|reviews?|rating|menu|info)\s+(for|of|at)\s+/i.test(q)) return 'business-lookup' as AnswerType;
+  if (/^(phone number for|hours for|reviews for|tell me about|info on)\s+/i.test(q)) return 'business-lookup' as AnswerType;
+
+  // Type 11: Life event — BEFORE guide to catch "having a baby, what services..."
   const hasSpecificService = /plumber|dentist|doctor|lawyer|mechanic|electrician|daycare|salon|repair|clean|roofing|hvac/.test(q);
   if (!hasSpecificService) {
     if (/just moved|new to (middletown|town|the area)|relocat|moving to|new resident/.test(q)) return 'life-event';
-    if (/just had a baby|new baby|pregnant|expecting|newborn/.test(q)) return 'life-event';
+    if (/just had a baby|new baby|pregnant|expecting|newborn|having a baby/.test(q)) return 'life-event';
     if (/retiring|just retired|senior living|senior care/.test(q)) return 'life-event';
     if (/starting a business|opening a (store|shop|restaurant)|new business/.test(q)) return 'life-event';
   }
 
+  // Type 4: Mixed — business + info signals (BEFORE service word pattern and Layer 1.5)
+  if (/\b(tips|advice)\s+(and|&)\s+(recommend|suggestion)/i.test(q)) return 'mixed' as AnswerType;
+  if (/\b(best|recommend|find|good)\b.+\b(tips|advice|what to expect|how much|cost|price)\b/i.test(q)) return 'mixed' as AnswerType;
+  if (/\b(tips|advice|what to expect|how much|cost|price)\b.+\b(recommend|best|find|good)\b/i.test(q)) return 'mixed' as AnswerType;
+  if (/what (should|do) i do\b|what (are|is) my options?\b|what now\b/i.test(q)) return 'mixed' as AnswerType;
+
+  // Note: service/category keyword matching is handled by Layer 1.5 (DB category check)
+  // No hardcoded service word lists needed here — search_terms in DB are authoritative
+
   // Type 6: Events/news
   if (/this weekend|this saturday|this sunday|events?\s+(near|in|this)|what's happening|what's new|festival|concert|upcoming/.test(q)) return 'news-events';
+
+  // Type 1: Bare service/category queries (2 words or less, all service words)
+  if (q.split(/\s+/).length <= 3 && /^(nail|hair|pet|auto|car|eye|skin|foot|body)\s+(salon|shop|store|repair|service|care|grooming|wash|clinic|spa|studio)s?$/i.test(q)) return 'business-recommendation' as AnswerType;
+
+  // Type 3: Info lookup — factual questions (not service requests)
+  if (/\b(tax rate|zip code|population|school district|county|area code|time zone|elevation|weather|temperature|forecast)\b/i.test(q)) return 'info-lookup' as AnswerType;
+  if (/^what (is|are) the\b.+\b(rate|code|number|population|district|zone)\b/i.test(q)) return 'info-lookup' as AnswerType;
+
+  // Type 5: Community — opinions, experiences
+  if (/\b(anyone|anybody|someone|has anyone|have you|who has)\s+(tried|been|visited|used|gone|experienced)\b/i.test(q)) return 'community' as AnswerType;
+  if (/\b(opinions?|thoughts?|experiences?)\s+(on|about|with)\b/i.test(q)) return 'community' as AnswerType;
 
   // Type 2: Guide/how-to
   if (/^how (do|can|to|should|much)\b|steps (for|to)|process (of|for)|guide to|what do i need to/.test(q)) return 'guide';
@@ -105,13 +128,27 @@ async function findBusinessByName(
 ): Promise<BusinessResult | null> {
   // Extract potential business name from query (remove common question words)
   const cleaned = query
-    .replace(/^(is|does|what|when|where|tell me about|info on|hours for|reviews for|phone for)\s+/i, '')
+    .replace(/^(is|does|what|when|where|tell me about|info on|hours for|reviews for|phone\s*(?:number)?\s*for)\s+/i, '')
     .replace(/\s+(open|closed)\s+(on|at|until|today|tomorrow|now|right now|this|every).*$/i, '')
     .replace(/\s+(open|closed|hours?|phone(?:\s*number)?|address|reviews?|rating|menu|website|number|info)\s*\??$/i, '')
     .replace(/'/g, "'") // normalize smart quotes
     .trim();
 
   if (cleaned.length < 3) return null;
+
+  // Reject if cleaned name is a generic category word (not a specific business name)
+  const CATEGORY_WORDS = new Set(['pizza','sushi','chinese','mexican','italian','thai','indian','japanese','korean',
+    'restaurant','restaurants','cafe','bar','salon','spa','gym','hotel','motel','dentist','doctor','lawyer',
+    'plumber','electrician','mechanic','daycare','pharmacy','bank','bakery','deli','nail','barber',
+    'tacos','burgers','coffee','tea','ramen','pho','bbq','seafood','steak','wings','noodles',
+    'acupuncture','chiropractor','therapy','yoga','fitness','martial arts','karate',
+    'insurance','accounting','tax','realtor','real estate','tutor','school',
+    'food','pet','grooming','cleaning','laundry','moving','storage','towing','painting','landscaping',
+    'roofing','flooring','fencing','hvac','heating','cooling','veterinarian','vet','optometrist','orthodontist']);
+  const cleanedLower = cleaned.toLowerCase().trim();
+  if (CATEGORY_WORDS.has(cleanedLower) || cleanedLower.split(/\s+/).every(w => CATEGORY_WORDS.has(w))) {
+    return null; // generic category — let category matching handle it
+  }
 
   // For fuzzy matching: bridge apostrophes with % wildcard between each word
   // "Cosimos" → "Cosimo" matches "Cosimo's"
@@ -126,7 +163,7 @@ async function findBusinessByName(
   // Try matching on display_name — with and without apostrophes
   const { data, error: dbError } = await supabase
     .from('businesses')
-    .select('id, slug, display_name, short_desc_en, avg_rating, review_count, phone, address_full, total_score, ai_tags')
+    .select('id, slug, display_name, short_desc_en, avg_rating, review_count, phone, address_full, total_score, ai_tags, latitude, longitude')
     .eq('is_active', true)
     .eq('site_id', siteId)
     .or(`display_name.ilike.%${baseSearch}%,display_name.ilike.%${fuzzyPattern}%`)
@@ -152,6 +189,8 @@ async function findBusinessByName(
     address_full: best.address_full,
     total_score: best.total_score || 0,
     ai_tags: best.ai_tags || [],
+    latitude: best.latitude || null,
+    longitude: best.longitude || null,
   };
 }
 
@@ -160,7 +199,7 @@ async function matchCategory(
   siteId: string,
   keywords: string[],
   fullQuery: string,
-): Promise<{ id: string; name: string } | null> {
+): Promise<{ id: string; name: string; score: number } | null> {
   const { data: categories } = await supabase
     .from('categories')
     .select('id, name_en, slug, search_terms')
@@ -173,7 +212,7 @@ async function matchCategory(
   const isFoodContext = /(restaurant|food|eat|dining|cuisine|takeout|delivery|dine|brunch|lunch|dinner|cafe|bar|grill|bakery|deli|pizza|burger|sushi|taco|coffee|ice cream)/i.test(fullQueryLower);
 
   let bestScore = 0;
-  let bestMatch: { id: string; name: string } | null = null;
+  let bestMatch: { id: string; name: string; score: number } | null = null;
 
   const queryLower = fullQuery.toLowerCase();
 
@@ -205,7 +244,7 @@ async function matchCategory(
 
     if (score > bestScore) {
       bestScore = score;
-      bestMatch = { id: cat.id, name: cat.name_en };
+      bestMatch = { id: cat.id, name: cat.name_en, score: bestScore };
     }
   }
 
@@ -275,7 +314,17 @@ export async function allocateAnswerType(
   // ─── Layer 1: Pattern match ───
   let type = detectTypeByPattern(query, history);
 
-  // ─── Layer 2: AI classification (if pattern didn't match) ───
+  // ─── Layer 1.5: DB category quick check (if pattern didn't match) ───
+  // Only classify as business if the category match is strong (score >= 8).
+  // Weak matches (score 2-5, e.g. "tax" matching finance) should go to AI for better classification.
+  if (!type && specificKws.length > 0) {
+    const category = await matchCategory(supabase, siteId, specificKws, query);
+    if (category && category.score >= 5) {
+      type = 'business-recommendation';
+    }
+  }
+
+  // ─── Layer 2: AI classification (if pattern AND category didn't match) ───
   if (!type) {
     type = await classifyWithAI(query, anthropicApiKey);
   }
@@ -293,8 +342,8 @@ export async function allocateAnswerType(
   }
 
   // Check for specific business name (upgrades to Type 9)
-  // Also check for community/news queries — "Texas Roadhouse reviews" should find the business
-  if (type === 'business-recommendation' || type === 'info-lookup' || type === 'community' || type === 'news-events') {
+  // Also check when pattern already detected business-lookup
+  if (type === 'business-lookup' || type === 'business-recommendation' || type === 'info-lookup' || type === 'community' || type === 'news-events') {
     const biz = await findBusinessByName(supabase, siteId, query);
     if (biz) {
       return {
@@ -302,6 +351,10 @@ export async function allocateAnswerType(
         type: 'business-lookup',
         singleBusiness: biz,
       };
+    }
+    // Pattern said business-lookup but no business found → fall back to info-lookup
+    if (type === 'business-lookup') {
+      return { ...emptyResult, type: 'info-lookup' };
     }
   }
 

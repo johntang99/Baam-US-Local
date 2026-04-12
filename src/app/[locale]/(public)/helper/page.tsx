@@ -16,17 +16,19 @@ export default async function HelperPage({ searchParams }: Props) {
 
   return (
     <main>
-      <div className="max-w-3xl mx-auto px-4 py-8">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-gradient-to-br from-primary to-orange-500 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4">
-            🤖
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-bold mb-2">Helper</h1>
-          <p className="text-text-secondary text-sm">
-            Your local AI assistant — find businesses, services, events, and get answers to any community question.
-          </p>
+      {/* Header — full width */}
+      <div className="text-center pt-8 pb-4 px-4">
+        <div className="w-14 h-14 bg-gradient-to-br from-primary to-orange-500 rounded-2xl flex items-center justify-center text-2xl mx-auto mb-3">
+          👩‍💼
         </div>
+        <h1 className="text-2xl sm:text-3xl font-bold mb-1">Helper</h1>
+        <p className="text-text-secondary text-sm">
+          Your local AI assistant — find businesses, services, events, and get answers to any community question.
+        </p>
+      </div>
 
+      {/* Chat — full width container, chat component handles its own widths */}
+      <div className="px-4 pb-8">
         <HelperChat initialQuery={initialQuery} />
       </div>
     </main>
