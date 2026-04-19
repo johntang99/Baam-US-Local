@@ -8,6 +8,7 @@ export interface MapBusiness {
   avg_rating: number | null;
   review_count: number | null;
   phone: string | null;
+  website_url: string | null;
   address_full: string | null;
   latitude: number;
   longitude: number;

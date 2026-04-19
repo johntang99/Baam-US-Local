@@ -42,7 +42,7 @@ export async function fetchMapBusinesses(opts?: {
   const supabase = createAdminClient() as any;
   const site = await getCurrentSite();
 
-  const fields = 'id, slug, display_name, short_desc_en, avg_rating, review_count, phone, address_full, latitude, longitude, ai_tags, total_score, is_featured';
+  const fields = 'id, slug, display_name, short_desc_en, avg_rating, review_count, phone, website_url, address_full, latitude, longitude, ai_tags, total_score, is_featured';
 
   let query = supabase
     .from('businesses')
@@ -135,6 +135,7 @@ export async function fetchMapBusinesses(opts?: {
     avg_rating: b.avg_rating,
     review_count: b.review_count,
     phone: b.phone,
+    website_url: b.website_url || null,
     address_full: b.address_full,
     latitude: Number(b.latitude),
     longitude: Number(b.longitude),

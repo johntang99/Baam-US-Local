@@ -52,7 +52,9 @@ export default function BusinessCard({ business: b, rank, isActive, onClick, com
     );
   }
 
-  // Full sidebar card
+  // Full sidebar card — two-column: left = NAP info, right = description
+  const desc = b.short_desc_en || '';
+
   return (
     <button
       type="button"
@@ -67,24 +69,34 @@ export default function BusinessCard({ business: b, rank, isActive, onClick, com
         <div className={`w-7 h-7 ${rankBg} rounded-full flex items-center justify-center text-white text-xs font-extrabold flex-shrink-0 mt-0.5`}>
           {rank}
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-bold mb-0.5 truncate">{b.display_name}</div>
-          <div className="flex items-center gap-1.5 text-xs text-text-secondary flex-wrap">
-            <span className="text-amber-500">{'★'.repeat(Math.round(b.avg_rating || 0))}</span>
-            <span className="font-semibold">{b.avg_rating}</span>
-            <span className="text-border">·</span>
-            <span>{b.review_count?.toLocaleString()} reviews</span>
-            {distLabel && <><span className="text-border">·</span><span className="text-blue-500 font-medium">{distLabel}</span></>}
+        <div className="flex-1 min-w-0 flex gap-4 items-center">
+          {/* Left column: NAP info */}
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold mb-0.5 truncate">{b.display_name}</div>
+            <div className="flex items-center gap-1.5 text-xs text-text-primary flex-wrap">
+              <span className="text-amber-500">{'★'.repeat(Math.round(b.avg_rating || 0))}</span>
+              <span className="font-semibold">{b.avg_rating}</span>
+              <span className="text-border">·</span>
+              <span>{b.review_count?.toLocaleString()} reviews</span>
+              {distLabel && <><span className="text-border">·</span><span className="text-blue-500 font-medium">{distLabel}</span></>}
+            </div>
+            {shortAddr && <div className="text-xs text-text-primary mt-1">{shortAddr}</div>}
+            <div className="flex items-center gap-3 mt-0.5 text-xs text-text-primary flex-wrap">
+              {b.phone && <span>📞 {b.phone}</span>}
+              {b.website_url && (
+                <a href={b.website_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+                  className="text-primary hover:underline truncate max-w-[160px]">
+                  🌐 {b.website_url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/.*$/, '')}
+                </a>
+              )}
+            </div>
           </div>
-          {shortAddr && <div className="text-xs text-text-muted mt-1">{shortAddr}</div>}
-          {b.phone && <div className="text-xs text-text-muted mt-0.5">📞 {b.phone}</div>}
-          {b.ai_tags.length > 0 && (
-            <div className="flex gap-1 mt-2 flex-wrap">
-              {b.ai_tags.slice(0, 3).map((tag) => (
-                <span key={tag} className="text-[10px] bg-primary/5 text-primary/80 px-1.5 py-0.5 rounded border border-primary/10">
-                  {tag}
-                </span>
-              ))}
+          {/* Right column: description */}
+          {desc && (
+            <div className="w-[45%] flex-shrink-0">
+              <p className="text-xs leading-4 text-text-primary line-clamp-3">
+                {desc}
+              </p>
             </div>
           )}
         </div>

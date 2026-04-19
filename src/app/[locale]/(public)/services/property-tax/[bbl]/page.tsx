@@ -5,6 +5,7 @@ import type { Metadata } from 'next';
 
 interface Props {
   params: Promise<{ locale: string; bbl: string }>;
+  searchParams: Promise<{ county?: string; municipality?: string }>;
 }
 
 const BORO_NAMES: Record<string, string> = {
@@ -27,18 +28,22 @@ function formatMoney(amount: number): string {
   return '$' + amount.toLocaleString('en-US');
 }
 
-async function fetchProperty(bbl: string) {
-  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:5001';
-  const res = await fetch(`${baseUrl}/api/services/property-tax?bbl=${encodeURIComponent(bbl)}`, {
+async function fetchProperty(bbl: string, county?: string, municipality?: string) {
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:6001';
+  const params = new URLSearchParams({ bbl });
+  if (county) params.set('county', county);
+  if (municipality) params.set('municipality', municipality);
+  const res = await fetch(`${baseUrl}/api/services/property-tax?${params}`, {
     next: { revalidate: 86400 },
   });
   if (!res.ok) return null;
   return res.json();
 }
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata({ params, searchParams }: Props): Promise<Metadata> {
   const { bbl } = await params;
-  const data = await fetchProperty(bbl);
+  const { county, municipality } = await searchParams;
+  const data = await fetchProperty(bbl, county, municipality);
   if (!data?.property) return { title: 'Not Found' };
 
   const p = data.property;
@@ -56,9 +61,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-export default async function PropertyDetailPage({ params }: Props) {
+export default async function PropertyDetailPage({ params, searchParams }: Props) {
   const { bbl } = await params;
-  const data = await fetchProperty(bbl);
+  const { county, municipality } = await searchParams;
+  const data = await fetchProperty(bbl, county, municipality);
   if (!data?.property) notFound();
 
   const p = data.property;

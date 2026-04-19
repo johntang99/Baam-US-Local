@@ -23,6 +23,7 @@ export interface BusinessResult {
   avg_rating: number | null;
   review_count: number | null;
   phone: string | null;
+  website_url?: string | null;
   address_full: string | null;
   total_score: number;
   ai_tags: string[];
@@ -90,6 +91,19 @@ export const TOWN_REGION_MAP: Record<string, string> = {
   'cornwall': '0f9cfd16-d1f7-4474-8ff1-20a2e7eb4a89',
 };
 
+// Address keywords for each town region — used for address-first location filtering
+// Maps region ID → keywords that should appear in address_full
+export const TOWN_ADDRESS_KEYWORDS: Record<string, string[]> = {
+  'a5bb3fb8-26b4-4a91-928e-0373f1d28be0': ['middletown', 'ny 10940', 'ny 10941'],           // Middletown
+  '1e316411-9ee1-41e5-b6d1-a0d92b0683d6': ['newburgh', 'ny 12550'],                           // Newburgh
+  '5b84e90c-0f37-4e33-b361-b870de175cf7': ['goshen', 'ny 10924'],                            // Goshen
+  'cdec82a7-eb63-41d2-8c82-95ec36bdb020': ['monroe', 'ny 10950'],                            // Monroe
+  '9d32b3ba-650a-4b52-96bb-7a587891e344': ['warwick', 'ny 10990'],                           // Warwick
+  '1e8e1ce2-1d65-49dc-a3d1-de9ad2123519': ['chester', 'ny 10918'],                           // Chester
+  '7a66b436-6117-463b-896a-19b928f67e92': ['port jervis', 'ny 12771'],                       // Port Jervis
+  '0f9cfd16-d1f7-4474-8ff1-20a2e7eb4a89': ['cornwall', 'ny 12518', 'ny 12520', 'ny 12577'], // Cornwall
+};
+
 export const GENERIC_WORDS = new Set([
   'best', 'good', 'top', 'recommend', 'find', 'near', 'nearby',
   'place', 'places', 'local', 'middletown', 'goshen', 'newburgh',
@@ -101,4 +115,11 @@ export const GENERIC_WORDS = new Set([
   'recently', 'lately', 'really', 'also', 'very', 'much',
   'this', 'that', 'with', 'for', 'has', 'have', 'been',
   'coming', 'happening', 'recent', 'upcoming',
+  // Common filler words that don't add search intent
+  'who', 'should', 'see', 'call', 'help', 'use', 'try',
+  'just', 'really', 'been', 'would', 'could', 'should',
+  'doing', 'going', 'make', 'take', 'give', 'area',
+  'around', 'here', 'nearby', 'down', 'broke',
+  'reliable', 'affordable', 'cheap', 'open', 'available',
+  'family', 'kids', 'year', 'old', 'new',
 ]);

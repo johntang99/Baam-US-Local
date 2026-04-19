@@ -93,21 +93,30 @@ export function eventsTable(events: EventItem[], maxRows = 6): string {
 
 export function relatedContentSection(related: RelatedContent): string {
   const blocks: string[] = [];
+
+  const formatItem = (title: string, url: string, snippet?: string) => {
+    // Use bullet with bold title, then snippet on next line with hard line break
+    if (snippet) {
+      return `- **[${title}](${url})**  \n  *${snippet}*`;
+    }
+    return `- **[${title}](${url})**`;
+  };
+
   if (related.guides.length > 0) {
-    blocks.push(section('📘', 'Related Guides'));
-    for (const g of related.guides) blocks.push(`- [${g.title}](/en/guides/${g.slug})${g.snippet ? ` — ${g.snippet}` : ''}`);
+    blocks.push('', section('📘', 'Related Guides'), '');
+    for (const g of related.guides) blocks.push(formatItem(g.title, `/en/guides/${g.slug}`, g.snippet));
   }
   if (related.news.length > 0) {
-    blocks.push(section('📰', 'Related News'));
-    for (const n of related.news) blocks.push(`- [${n.title}](/en/news/${n.slug})${n.snippet ? ` — ${n.snippet}` : ''}`);
+    blocks.push('', section('📰', 'Related News'), '');
+    for (const n of related.news) blocks.push(formatItem(n.title, `/en/news/${n.slug}`, n.snippet));
   }
   if (related.forum.length > 0) {
-    blocks.push(section('💬', 'Community Discussions'));
-    for (const t of related.forum) blocks.push(`- [${t.title}](/en/forum/${t.boardSlug || 'general'}/${t.slug})${t.snippet ? ` — ${t.snippet}` : ''}`);
+    blocks.push('', section('💬', 'Community Discussions'), '');
+    for (const t of related.forum) blocks.push(formatItem(t.title, `/en/forum/${t.boardSlug || 'general'}/${t.slug}`, t.snippet));
   }
   if (related.discover.length > 0) {
-    blocks.push(section('📝', 'Community Posts'));
-    for (const d of related.discover) blocks.push(`- [${d.title}](/en/discover/${d.slug})${d.snippet ? ` — ${d.snippet}` : ''}`);
+    blocks.push('', section('📝', 'Community Posts'), '');
+    for (const d of related.discover) blocks.push(formatItem(d.title, `/en/discover/${d.slug}`, d.snippet));
   }
   return blocks.join('\n');
 }

@@ -129,7 +129,7 @@ export async function askHelper(
       const mapped = businesses.filter((b) => b.latitude && b.longitude).map((b) => ({
         id: b.id, slug: b.slug, display_name: b.display_name,
         short_desc_en: b.short_desc_en || '', avg_rating: b.avg_rating,
-        review_count: b.review_count, phone: b.phone,
+        review_count: b.review_count, phone: b.phone, website_url: b.website_url || null,
         address_full: b.address_full, latitude: Number(b.latitude),
         longitude: Number(b.longitude), ai_tags: b.ai_tags || [],
         total_score: b.total_score || 0, is_featured: !!b.is_featured,
@@ -196,9 +196,22 @@ export async function askHelper(
         return logResult({ data: { answer, sources, intent: 'localRecommendation', keywords: alloc.keywords, usedWebFallback: false, provider: 'template', quickReplies: getQuickReplies('no-match', alloc.keywords) } });
       }
 
+      // Approach 3: If ambiguous, add alternative category quick replies
+      let ambiguityReplies: string[] | undefined;
+      if (category.ambiguous && category.alternatives && category.alternatives.length > 0) {
+        ambiguityReplies = category.alternatives.map(alt =>
+          `Show me ${alt.name} instead`
+        );
+      }
+
       const townRegionId = detectTownRegionId(query);
       const { businesses: rawBusinesses, locationFallback } = await fetchCategoryBusinesses(supabase, site.id, category.id, townRegionId);
-      const related = await fetchRelatedContent(supabase, site.id, alloc.keywords);
+      // Use category name + keywords for related content (more relevant than generic keywords alone)
+      const relatedKeywords = [...new Set([
+        ...category.name.toLowerCase().split(/\s+&?\s*/).filter(w => w.length > 2),
+        ...alloc.keywords.filter(kw => kw.length > 3), // only meaningful keywords
+      ])].slice(0, 5); // max 5 keywords for relevance
+      const related = await fetchRelatedContent(supabase, site.id, relatedKeywords);
 
       if (rawBusinesses.length === 0) {
         const { answer, sources } = buildNoMatch(query, alloc.keywords);
@@ -234,10 +247,14 @@ export async function askHelper(
       return logResult({
         data: {
           answer, sources, intent: 'localRecommendation', keywords: alloc.keywords, usedWebFallback: false, provider: 'template',
-          quickReplies: getQuickReplies('business-recommendation', alloc.keywords, {
-            category: category.name,
-            topBizNames: businesses.slice(0, 2).map(b => b.display_name),
-          }),
+          quickReplies: [
+            // If ambiguous, prepend alternative category suggestions
+            ...(ambiguityReplies || []),
+            ...getQuickReplies('business-recommendation', alloc.keywords, {
+              category: category.name,
+              topBizNames: businesses.slice(0, 2).map(b => b.display_name),
+            }),
+          ].slice(0, 4), // max 4 quick replies
           mapBusinesses: toMapBusinesses(businesses),
         },
       });

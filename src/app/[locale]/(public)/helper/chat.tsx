@@ -282,6 +282,9 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
   const [loadingStep, setLoadingStep] = useState(0);
   const [autoAsked, setAutoAsked] = useState(false);
   const [feedbackSent, setFeedbackSent] = useState<Record<string, 1 | -1>>({}); // messageId → rating
+  const [locationContext, setLocationContext] = useState<string>(''); // town name to append
+  const [locationMenuOpen, setLocationMenuOpen] = useState(false);
+  const locationMenuRef = useRef<HTMLDivElement>(null);
   const [mapView, setMapView] = useState<Record<string, boolean>>({}); // messageId → show map
   const [mapSelectedId, setMapSelectedId] = useState<string | null>(null);
   const [mapExpandedId, setMapExpandedId] = useState<string | null>(null); // which message's map is expanded
@@ -315,17 +318,16 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
     return () => clearInterval(timer);
   }, [loading, renderingAnswer]);
 
+  // Close location menu on outside click
   useEffect(() => {
-    if (initialQuery && !autoAsked) {
-      setAutoAsked(true);
-      void handleAsk(initialQuery);
-      // Clear ?q= from URL so browser back doesn't re-trigger the query
-      const url = new URL(window.location.href);
-      url.searchParams.delete('q');
-      window.history.replaceState({}, '', url.toString());
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialQuery, autoAsked]);
+    const handleClickOutside = (e: MouseEvent) => {
+      if (locationMenuRef.current && !locationMenuRef.current.contains(e.target as Node)) {
+        setLocationMenuOpen(false);
+      }
+    };
+    if (locationMenuOpen) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [locationMenuOpen]);
 
   const progressivelyRenderAnswer = useCallback(
     async (messageId: string, fullContent: string, meta: Pick<Message, 'sources' | 'usedWebFallback' | 'quickReplies' | 'query' | 'answerType' | 'provider' | 'keywords' | 'mapBusinesses'>) => {
@@ -355,8 +357,14 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
   );
 
   async function handleAsk(rawQuery: string) {
-    const query = rawQuery.trim();
+    let query = rawQuery.trim();
     if (!query || loading) return;
+    // Append location context if set and not already in the query
+    const townNames = ['middletown', 'goshen', 'monroe', 'newburgh', 'warwick', 'chester', 'cornwall', 'port jervis'];
+    const hasLocation = townNames.some(t => query.toLowerCase().includes(t)) || /near me/i.test(query);
+    if (locationContext && !hasLocation) {
+      query = `${query} in ${locationContext}`;
+    }
     const nextHistory = messages.map((m) => ({ role: m.role, content: m.fullContent ?? m.content })) as { role: 'user' | 'assistant'; content: string }[];
     setInput('');
     setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: 'user', content: query }]);
@@ -388,6 +396,18 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
       mapBusinesses: data.mapBusinesses,
     });
   }
+
+  // Auto-ask from URL ?q= parameter — must be after handleAsk is defined
+  useEffect(() => {
+    if (initialQuery && !autoAsked && !loading) {
+      setAutoAsked(true);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('q');
+      window.history.replaceState({}, '', url.toString());
+      void handleAsk(initialQuery);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuery, autoAsked, loading]);
 
   function handleNewChat() {
     setMessages([]);
@@ -682,31 +702,125 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
         </div>{/* end max-w-3xl messages wrapper */}
       </div>
 
-      <form onSubmit={(e) => { e.preventDefault(); void handleAsk(input); }} className="sticky bottom-4 max-w-3xl mx-auto">
-        <div className="flex gap-2 bg-bg-card border border-border rounded-xl p-2 shadow-lg">
-          <input
-            ref={inputRef} type="text" value={input}
-            onChange={(e) => setInput(e.target.value)}
-            disabled={loading || renderingAnswer}
-            placeholder={voice.isListening ? 'Listening...' : 'Ask Helper anything about the local community...'}
-            className="flex-1 h-10 px-3 text-sm outline-none bg-transparent"
-          />
-          {voice.isSupported && (
-            <button type="button" onClick={voice.toggle} disabled={loading || renderingAnswer}
-              className={`h-10 w-10 flex items-center justify-center rounded-lg transition-colors flex-shrink-0 ${voice.isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-bg-page text-text-secondary hover:bg-primary/10 hover:text-primary'} disabled:opacity-50`}
-              title={voice.isListening ? 'Stop' : 'Voice input'}>
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
-                {voice.isListening
-                  ? <path d="M6 6h12v12H6z" />
-                  : <path d="M12 14a3 3 0 003-3V5a3 3 0 10-6 0v6a3 3 0 003 3zm5-3a5 5 0 01-10 0H5a7 7 0 0014 0h-2zm-4 7.93A7.001 7.001 0 0112 19a7.001 7.001 0 01-1 0V22h2v-3.07z" />
-                }
-              </svg>
-            </button>
-          )}
-          <button type="submit" disabled={loading || renderingAnswer || !input.trim()}
-            className="h-10 px-5 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary-dark disabled:opacity-50 transition-colors flex-shrink-0">
-            Send
-          </button>
+      <form onSubmit={(e) => { e.preventDefault(); void handleAsk(input); }} className="sticky bottom-8 max-w-3xl mx-auto">
+        <div className="bg-bg-card border-2 border-primary/20 rounded-2xl shadow-[0_4px_24px_rgba(249,115,22,0.12)] overflow-visible">
+          {/* Row 1: Text input */}
+          <div className="px-5 pt-4 pb-2">
+            <input
+              ref={inputRef} type="text" value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={loading || renderingAnswer}
+              placeholder={voice.isListening ? 'Listening...' : (locationContext ? `Ask about ${locationContext}...` : 'Ask Helper anything about the local community...')}
+              className="w-full text-[15px] outline-none bg-transparent text-text-primary placeholder:text-text-muted/60"
+            />
+          </div>
+
+          {/* Row 2: Controls */}
+          <div className="flex items-center justify-between px-3 pb-3 pt-0.5">
+            {/* Left controls */}
+            <div className="flex items-center gap-1.5">
+              {/* "+" location button */}
+              <div className="relative" ref={locationMenuRef}>
+                <button type="button"
+                  onClick={() => setLocationMenuOpen(!locationMenuOpen)}
+                  className={`h-9 w-9 flex items-center justify-center rounded-full border-2 transition-all ${
+                    locationContext
+                      ? 'border-primary text-white bg-primary hover:bg-primary/90 shadow-sm'
+                      : 'border-primary/40 text-primary hover:border-primary hover:bg-primary/10'
+                  }`}
+                  title="Set location context">
+                  <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
+                </button>
+
+                {/* Location dropdown — two columns */}
+                {locationMenuOpen && (
+                  <div className="absolute bottom-11 left-0 bg-bg-card border border-border rounded-xl shadow-xl p-2 w-[340px] z-50">
+                    <p className="text-[10px] text-text-muted px-2 pt-0.5 pb-2 font-medium uppercase tracking-wide">Set your location</p>
+
+                    {/* GPS button — full width */}
+                    <button type="button"
+                      onClick={() => {
+                        if (navigator.geolocation) {
+                          navigator.geolocation.getCurrentPosition(
+                            () => { setLocationContext('near me'); setLocationMenuOpen(false); },
+                            () => { setLocationContext('Middletown'); setLocationMenuOpen(false); },
+                            { enableHighAccuracy: false, timeout: 10000 },
+                          );
+                        } else { setLocationContext('Middletown'); setLocationMenuOpen(false); }
+                      }}
+                      className={`w-full text-left text-sm px-3 py-2 rounded-lg mb-1.5 transition-colors ${
+                        locationContext === 'near me' ? 'bg-primary/10 text-primary font-medium' : 'text-text-primary hover:bg-bg-page'
+                      }`}
+                    >📍 Use my location</button>
+
+                    {/* Town grid — two columns */}
+                    <div className="grid grid-cols-2 gap-1">
+                      {[
+                        { label: 'Middletown', value: 'Middletown' },
+                        { label: 'Goshen', value: 'Goshen' },
+                        { label: 'Monroe', value: 'Monroe' },
+                        { label: 'Newburgh', value: 'Newburgh' },
+                        { label: 'Warwick', value: 'Warwick' },
+                        { label: 'Chester', value: 'Chester' },
+                        { label: 'Cornwall', value: 'Cornwall' },
+                        { label: 'Port Jervis', value: 'Port Jervis' },
+                      ].map((item) => (
+                        <button key={item.value} type="button"
+                          onClick={() => { setLocationContext(item.value); setLocationMenuOpen(false); }}
+                          className={`text-left text-sm px-3 py-2 rounded-lg transition-colors ${
+                            locationContext === item.value ? 'bg-primary/10 text-primary font-medium' : 'text-text-primary hover:bg-bg-page'
+                          }`}
+                        >🏘️ {item.label}</button>
+                      ))}
+                    </div>
+
+                    {locationContext && (
+                      <>
+                        <div className="border-t border-border mt-1.5 mb-1" />
+                        <button type="button" onClick={() => { setLocationContext(''); setLocationMenuOpen(false); }}
+                          className="w-full text-left text-sm px-3 py-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors">
+                          ✕ Clear location
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Location badge — shown inline when selected */}
+              {locationContext && (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-primary bg-primary/5 border border-primary/15 rounded-full px-2 py-0.5">
+                  📍 {locationContext}
+                  <button type="button" onClick={() => setLocationContext('')} className="hover:text-red-500 ml-0.5 text-[10px]">✕</button>
+                </span>
+              )}
+            </div>
+
+            {/* Right controls */}
+            <div className="flex items-center gap-1">
+              {voice.isSupported && (
+                <button type="button" onClick={voice.toggle} disabled={loading || renderingAnswer}
+                  className={`h-9 w-9 flex items-center justify-center rounded-full transition-all ${
+                    voice.isListening ? 'bg-red-500 text-white animate-pulse shadow-md' : 'text-primary hover:bg-primary/10'
+                  } disabled:opacity-50`}
+                  title={voice.isListening ? 'Stop' : 'Voice input'}>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4.5 h-4.5">
+                    {voice.isListening
+                      ? <path d="M6 6h12v12H6z" />
+                      : <path d="M12 14a3 3 0 003-3V5a3 3 0 10-6 0v6a3 3 0 003 3zm5-3a5 5 0 01-10 0H5a7 7 0 0014 0h-2zm-4 7.93A7.001 7.001 0 0012 19a7.001 7.001 0 01-1 0V22h2v-3.07z" />
+                    }
+                  </svg>
+                </button>
+              )}
+              <button type="submit" disabled={loading || renderingAnswer || !input.trim()}
+                className={`h-9 w-9 flex items-center justify-center rounded-full transition-all ${
+                  input.trim() ? 'bg-primary text-white hover:bg-primary/90 shadow-md' : 'bg-primary/10 text-primary/40'
+                } disabled:opacity-40`}
+                title="Send">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" /></svg>
+              </button>
+            </div>
+          </div>
         </div>
       </form>
     </div>

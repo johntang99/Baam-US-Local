@@ -64,6 +64,7 @@ function detectTypeByPattern(query: string, history: HelperMessage[]): AnswerTyp
   // Type 5: Community — opinions, experiences
   if (/\b(anyone|anybody|someone|has anyone|have you|who has)\s+(tried|been|visited|used|gone|experienced)\b/i.test(q)) return 'community' as AnswerType;
   if (/\b(opinions?|thoughts?|experiences?)\s+(on|about|with)\b/i.test(q)) return 'community' as AnswerType;
+  if (/\bwhat do (people|locals|residents|others)\s+(think|say|feel)\b/i.test(q)) return 'community' as AnswerType;
 
   // Type 2: Guide/how-to
   if (/^how (do|can|to|should|much)\b|steps (for|to)|process (of|for)|guide to|what do i need to/.test(q)) return 'guide';
@@ -229,14 +230,28 @@ async function matchCategory(
       }
     }
 
-    // Individual keyword matching
+    // Individual keyword matching — word boundary + stem matching
+    const wordMatch = (text: string, kw: string) => {
+      const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return kw.length <= 4
+        ? new RegExp(`\\b${escaped}\\b`, 'i').test(text)
+        : new RegExp(`\\b${escaped}`, 'i').test(text);
+    };
+    const stem = (w: string) => {
+      const s = w.toLowerCase();
+      for (const sfx of ['ation','tion','sion','ment','ness','ible','able','ence','ance','ing','ous','ive','ity','ful','ist','ize','ise','ory','ery','ary','ant','ent','age','ed','er','or','ly','al','es','s']) {
+        if (s.length > sfx.length + 3 && s.endsWith(sfx)) return s.slice(0, -sfx.length);
+      }
+      return s;
+    };
+    const stemMatch = (a: string, b: string) => { const sa = stem(a), sb = stem(b); return sa.length >= 4 && sb.length >= 4 && sa === sb; };
     for (const kw of keywords) {
       const kwLower = kw.toLowerCase();
       if (nameEn === kwLower) score += 20;
-      else if (nameEn.includes(kwLower) || kwLower.includes(nameEn)) score += 10;
-      if (slug.includes(kwLower)) score += 8;
-      if (terms.some((t: string) => t === kwLower)) score += 5;
-      else if (terms.some((t: string) => t.includes(kwLower) || kwLower.includes(t))) score += 2;
+      else if (wordMatch(nameEn, kwLower)) score += 10;
+      if (wordMatch(slug, kwLower)) score += 8;
+      if (terms.some((t: string) => t === kwLower || stemMatch(t, kwLower))) score += 5;
+      else if (terms.some((t: string) => wordMatch(t, kwLower) || wordMatch(kwLower, t))) score += 2;
     }
 
     if (isFoodContext && slug.startsWith('food-')) score += 15;

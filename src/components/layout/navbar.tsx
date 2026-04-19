@@ -9,13 +9,13 @@ import { AuthModal } from '@/components/shared/auth-modal';
 import type { User } from '@supabase/supabase-js';
 
 const navItems = [
+  { href: '/helper', key: 'helper' },
+  { href: '/discover', key: 'discover' },
   { href: '/news', key: 'news' },
   { href: '/guides', key: 'guides' },
   { href: '/businesses', key: 'businesses' },
-  { href: '/discover', key: 'discover' },
   { href: '/events', key: 'events' },
   { href: '/forum', key: 'forum' },
-  { href: '/helper', key: 'helper' },
   { href: '/map', key: 'map' },
   { href: '/services', key: 'services' },
 ] as const;
