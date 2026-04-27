@@ -89,11 +89,30 @@ export async function askHelper(
     };
     console.log(`[Helper] Allocated type: ${alloc.type} | keywords: ${alloc.keywords.join(',')} | singleBiz: ${alloc.singleBusiness?.display_name || 'none'}`);
 
-    // Type 7 (follow-up) and unimplemented types: delegate to engine
-    const engineTypes = new Set(['follow-up', 'life-event']);
+    // Fast direct OpenAI call — bypasses full engine pipeline (2-3x faster)
+    // GPT-4.1-mini: best balance of speed + quality
+    const runFastAI = async (systemPrompt: string): Promise<HelperResult> => {
+      const openAiKey = process.env.OPENAI_API_KEY || '';
+      const model = process.env.HELPER_FAST_MODEL || 'gpt-4.1-mini';
+      const msgs = [
+        { role: 'system' as const, content: systemPrompt },
+        ...history.map(h => ({ role: h.role as 'user' | 'assistant', content: h.content })),
+        { role: 'user' as const, content: query },
+      ];
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openAiKey}` },
+        body: JSON.stringify({ model, max_tokens: 2048, messages: msgs }),
+      });
+      if (!response.ok) throw new Error(`OpenAI API error: ${response.status}`);
+      const data = await response.json();
+      const answer = data.choices?.[0]?.message?.content || '';
+      return { answer, sources: [], intent: 'guideMode' as HelperResult['intent'], keywords: alloc.keywords, usedWebFallback: false, provider: `openai:${model}` };
+    };
 
-    if (engineTypes.has(alloc.type)) {
-      // Use the AI engine for these types
+    // Type 7 (follow-up): needs full engine for conversation context
+    // Type 11 (life-event): use fast AI
+    if (alloc.type === 'follow-up') {
       const helper = createHelper({
         siteName: 'Baam',
         assistantName: 'Helper',
@@ -120,6 +139,19 @@ export async function askHelper(
         supabaseAdmin: supabase,
       });
       const result = await helper.ask(query, history);
+      return logResult({ data: result });
+    }
+
+    if (alloc.type === 'life-event') {
+      const result = await runFastAI(
+        `You are "Helper", Baam's local AI assistant for Middletown & Orange County, NY. The user is going through a major life change. Give a comprehensive, structured guide covering multiple areas (documents, housing, healthcare, education, transportation, finances). Use tables, checklists, and timelines. Be specific about local resources.`
+      );
+      const related = await fetchRelatedContent(supabase, site.id, alloc.keywords);
+      result.sources = [
+        ...related.guides.map(g => ({ type: 'Guide', title: g.title, url: `/guides/${g.slug}`, snippet: g.snippet })),
+        ...related.news.map(n => ({ type: 'News', title: n.title, url: `/news/${n.slug}`, snippet: n.snippet })),
+      ];
+      result.quickReplies = getQuickReplies('guide', alloc.keywords);
       return logResult({ data: result });
     }
 
@@ -261,36 +293,11 @@ export async function askHelper(
     }
 
     // ─── Types 2, 3, 4: Guide, Info, Mixed ───────────────
-    // These use AI for the main answer, then enhance with structured content
+    // Use fast direct OpenAI call (2-3x faster than full engine pipeline)
     if (alloc.type === 'guide' || alloc.type === 'info-lookup' || alloc.type === 'mixed') {
-      // For info-lookup and mixed: override locale kit to encourage direct answers
-      const localeKit = (alloc.type === 'info-lookup' || alloc.type === 'mixed')
-        ? createEnglishLocaleKit({
-            personalityOverride: `You are "Helper", Baam's local AI assistant for Middletown & Orange County, NY. Answer directly from your general knowledge AND the search results provided — DO NOT say "I don't have this in my search results" or "no local results found." Just answer the question clearly and helpfully. If you can localize the answer to Orange County, do so. When the question involves both information AND services, provide the info first, then recommend relevant local businesses.`,
-          })
-        : createEnglishLocaleKit();
+      const systemPrompt = `You are "Helper", Baam's local AI assistant for Middletown & Orange County, NY. Answer directly and helpfully. Use headings, tables, and bullet points for structure. Localize answers to Orange County/Middletown when possible. DO NOT say "I don't have this in my search results". ${alloc.type === 'mixed' ? 'When the question involves both information AND services, provide the info first, then recommend relevant local businesses.' : ''}${alloc.type === 'info-lookup' ? 'Give a direct, concise factual answer.' : ''}`;
 
-      const helper = createHelper({
-        siteName: 'Baam',
-        assistantName: 'Helper',
-        siteDescription: 'Local community platform for Middletown & Orange County, NY',
-        contentTypes: [
-          { key: 'businesses', label: 'Business', pathPrefix: '/businesses/', isPrimary: true },
-          { key: 'guides', label: 'Guide', pathPrefix: '/guides/' },
-          { key: 'news', label: 'News', pathPrefix: '/news/' },
-          { key: 'forum', label: 'Forum', pathPrefix: '/forum/' },
-          { key: 'discover', label: 'Discover', pathPrefix: '/discover/' },
-          { key: 'events', label: 'Event', pathPrefix: '/events/' },
-        ],
-        fetcher: createBaamEnglishFetcher(supabase),
-        localeKit,
-        siteContext: { siteId: site.id, regionIds: site.regionIds, siteScope: 'en' },
-        providers: { strategy: 'anthropic', anthropicApiKey, anthropicModel: process.env.HELPER_ANTHROPIC_MODEL || 'claude-haiku-4-5' },
-        features: { webFallbackEnabled: true, answerMaxTokens: 2048 },
-        supabaseAdmin: supabase,
-      });
-
-      const aiResult = await helper.ask(query, history);
+      const aiResult = await runFastAI(systemPrompt);
       const aiAnswer = aiResult.answer;
 
       // Fetch related content and businesses for enrichment

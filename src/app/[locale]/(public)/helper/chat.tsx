@@ -314,7 +314,7 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
 
   useEffect(() => {
     if (!loading && !renderingAnswer) { setLoadingStep(0); return; }
-    const timer = setInterval(() => setLoadingStep((p) => (p + 1) % LOADING_MESSAGES.length), 1700);
+    const timer = setInterval(() => setLoadingStep((p) => (p + 1) % LOADING_MESSAGES.length), 1200);
     return () => clearInterval(timer);
   }, [loading, renderingAnswer]);
 
@@ -333,13 +333,17 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
     async (messageId: string, fullContent: string, meta: Pick<Message, 'sources' | 'usedWebFallback' | 'quickReplies' | 'query' | 'answerType' | 'provider' | 'keywords' | 'mapBusinesses'>) => {
       setRenderingAnswer(true);
       const total = fullContent.length;
-      const targetMs = Math.min(10000, Math.max(3000, total * 10));
-      const tickMs = 24;
-      const step = Math.max(2, Math.ceil(total / Math.max(1, Math.floor(targetMs / tickMs))));
+      const isTemplate = meta.provider === 'template' || meta.provider === 'safety-filter';
+      // Template answers: fast reveal (~1-2s). AI answers: moderate typing (~2-3s).
+      const targetMs = isTemplate
+        ? Math.min(1500, Math.max(800, total * 3))
+        : Math.min(3000, Math.max(1500, total * 5));
+      const tickMs = 16;
+      const step = Math.max(4, Math.ceil(total / Math.max(1, Math.floor(targetMs / tickMs))));
       let index = 0;
       while (index < total) {
         const c = fullContent[index] || '';
-        const pause = /[.!?\n]/.test(c) ? 20 : 0;
+        const pause = isTemplate ? 0 : (/[.!?\n]/.test(c) ? 12 : 0);
         await new Promise((r) => setTimeout(r, tickMs + pause));
         index = Math.min(index + step, total);
         setMessages((prev) => prev.map((m) => m.id === messageId ? { ...m, content: fullContent.slice(0, index) } : m));
@@ -387,8 +391,13 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
 
     const data = result.data;
     const assistantId = `a-${Date.now()}`;
-    // Don't add empty message — progressive render will add content directly
-    setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', content: '', fullContent: data.answer }]);
+    // Show map/business cards immediately while text animates
+    setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', content: '', fullContent: data.answer, mapBusinesses: data.mapBusinesses }]);
+    // Auto-enable map view immediately so it shows during typing
+    if (data.mapBusinesses && data.mapBusinesses.length > 0) {
+      setMapView((prev) => ({ ...prev, [assistantId]: true }));
+      setMapListMode((prev) => ({ ...prev, [assistantId]: true }));
+    }
     setLoading(false);
     await progressivelyRenderAnswer(assistantId, data.answer, {
       sources: data.sources, usedWebFallback: data.usedWebFallback, quickReplies: data.quickReplies,
@@ -484,8 +493,8 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
                   )}
                 </div>
               )}
-              {/* Map/List toggle for business recommendations (only after fully rendered) */}
-              {message.mapBusinesses && message.mapBusinesses.length > 0 && !message.fullContent && (
+              {/* Map/List toggle for business recommendations — shows immediately */}
+              {message.mapBusinesses && message.mapBusinesses.length > 0 && (
                 <div className="flex border border-border rounded-lg overflow-hidden mb-4">
                   <button type="button" onClick={() => setMapView(prev => ({ ...prev, [message.id]: false }))}
                     className={`flex-1 py-2 text-xs font-semibold transition-colors ${!mapView[message.id] ? 'bg-bg-card text-text-primary' : 'bg-bg-page text-text-muted'}`}>
@@ -499,7 +508,7 @@ export function HelperChat({ initialQuery }: HelperChatProps) {
               )}
 
               {/* Map view (when toggled) */}
-              {mapView[message.id] && message.mapBusinesses && !message.fullContent && (
+              {mapView[message.id] && message.mapBusinesses && (
                 <>
                   {/* Google Maps-style expanded overlay: sidebar + map */}
                   {mapExpandedId === message.id && (
